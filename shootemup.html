@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>VOID RUNNER</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="game-container">
+
+  <div id="hud" class="hidden">
+    <div id="wave-progress">
+      <div class="wave-progress-label">VAGUE <span id="wave-val">1</span> · ENNEMIS <span id="enemy-count">0</span></div>
+      <div class="wave-progress-bg"><div id="enemy-fill"></div></div>
+    </div>
+    <div class="hud-block">
+      <div class="stat-label">Coque <span id="hp-val">100 / 100</span></div>
+      <div class="bar-bg"><div class="bar-fill" id="hp-fill"></div></div>
+      <div class="stat-label" style="margin-top:8px;">Niveau <span id="lvl-val">1</span></div>
+      <div class="bar-bg"><div class="bar-fill" id="xp-fill"></div></div>
+      <div class="stat-label mode-label" style="margin-top:8px;">Mode <span id="mode-val">REPLIÉ</span></div>
+      <div class="bar-bg boost-bar"><div class="bar-fill" id="boost-fill"></div></div>
+      <div class="boost-caption">MAJ · BOOST</div>
+    </div>
+    <div id="run-counters">
+      <div class="run-counter score-counter"><span class="counter-label">SCORE</span><b id="score-val">0</b></div>
+      <div class="run-counter scrap-counter"><span class="counter-label">OR</span><b id="scrap-run-val">0</b></div>
+    </div>
+  </div>
+
+  <div id="wave-banner"></div>
+
+  <div id="menu-screen" class="screen">
+    <div class="title">VOID&nbsp;RUNNER</div>
+    <div class="subtitle">shoot'em up roguelite</div>
+    <div class="panel">
+      <div class="scrap-line">Ferraille totale &nbsp;<b id="menu-scrap">0</b></div>
+      <button class="btn" onclick="startRun()">Nouvelle Partie</button>
+      <button class="btn" onclick="openShop('menu')">Atelier de Mods</button>
+    </div>
+    <div class="footnote">CTRL : replié / combat · Z : avancer · S : marche arrière · Q/D : dash latéral · MAJ : boost · Souris : viser · Clic / Espace : tirer</div>
+  </div>
+
+  <div id="levelup-screen" class="screen hidden">
+    <div class="title" style="font-size:26px; letter-spacing:6px;">NIVEAU SUPÉRIEUR</div>
+    <div class="subtitle">augmentation de vaisseau</div>
+    <div class="levelup-content">
+      <div class="level-stats" id="level-stats"></div>
+      <div class="cards" id="cards-container"></div>
+      <div class="level-equipment" id="level-equipment"></div>
+    </div>
+  </div>
+
+  <div id="pause-screen" class="screen hidden">
+    <div class="title" style="font-size:34px;">PAUSE</div>
+    <div class="panel">
+      <button class="btn" onclick="resumeRun()">Reprendre la partie</button>
+      <button class="btn secondary" onclick="quitToMenu()">Menu principal</button>
+    </div>
+  </div>
+
+  <div id="gameover-screen" class="screen hidden">
+    <div class="title" style="font-size:34px; color:var(--magenta); text-shadow:0 0 18px var(--magenta);">VAISSEAU DÉTRUIT</div>
+    <div class="panel" style="text-align:center;">
+      <div class="stat-label">Score final</div>
+      <div style="font-size:26px; margin:4px 0 14px;" id="go-score">0</div>
+      <div class="stat-label">Ferraille récupérée</div>
+      <div style="font-size:20px; color:var(--amber); margin:4px 0 18px;" id="go-scrap">+0</div>
+      <button class="btn" onclick="openShop('gameover')">Aller à l'Atelier</button>
+      <button class="btn" onclick="startRun()">Relancer une Partie</button>
+    </div>
+  </div>
+
+  <div id="shop-screen" class="screen hidden">
+    <div class="title" style="font-size:26px; letter-spacing:6px;">ATELIER DE MODS</div>
+    <div class="scrap-line">Ferraille disponible &nbsp;<b id="shop-scrap">0</b></div>
+    <div class="panel shop-list" id="shop-list"></div>
+    <button class="btn" style="width:300px; margin-top:16px;" onclick="closeShop()">Retour</button>
+  </div>
+
+  <div id="debug-screen" class="screen hidden">
+    <div class="title" style="font-size:26px; letter-spacing:6px;">DEBUG</div>
+    <div class="subtitle">test des améliorations et équipements</div>
+    <div class="panel shop-list" id="debug-list"></div>
+    <button class="btn" style="width:300px; margin-top:16px;" onclick="closeDebugMenu()">Reprendre</button>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
