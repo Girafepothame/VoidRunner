@@ -10,7 +10,7 @@
 
   <div id="hud" class="hidden">
     <div id="wave-progress">
-      <div class="wave-progress-label">VAGUE <span id="wave-val">1</span> · ENNEMIS <span id="enemy-count">0</span></div>
+      <div class="wave-progress-label">MENACE <span id="wave-val">1</span> · ENNEMIS <span id="enemy-count">0</span></div>
       <div class="wave-progress-bg"><div id="enemy-fill"></div></div>
     </div>
     <div class="hud-block">
@@ -18,17 +18,42 @@
       <div class="bar-bg"><div class="bar-fill" id="hp-fill"></div></div>
       <div class="stat-label" style="margin-top:8px;">Niveau <span id="lvl-val">1</span></div>
       <div class="bar-bg"><div class="bar-fill" id="xp-fill"></div></div>
-      <div class="stat-label mode-label" style="margin-top:8px;">Mode <span id="mode-val">REPLIÉ</span></div>
+      <div class="stat-label mode-label" style="margin-top:8px;">Dash <span id="dash-val">PRÊT</span></div>
+      <div class="bar-bg"><div class="bar-fill" id="dash-fill"></div></div>
       <div class="bar-bg boost-bar"><div class="bar-fill" id="boost-fill"></div></div>
       <div class="boost-caption">MAJ · BOOST</div>
     </div>
     <div id="run-counters">
       <div class="run-counter score-counter"><span class="counter-label">SCORE</span><b id="score-val">0</b></div>
       <div class="run-counter scrap-counter"><span class="counter-label">OR</span><b id="scrap-run-val">0</b></div>
+      <div class="run-counter biome-counter"><span class="counter-label">BIOME</span><b id="biome-val">NÉBULEUSE</b></div>
+      <div class="run-counter portal-counter"><span class="counter-label">PORTAIL</span><b id="portal-val">À 500</b></div>
     </div>
   </div>
 
   <div id="wave-banner"></div>
+
+  <div id="inventory-screen" class="inventory-overlay hidden">
+    <div class="panel inventory-panel">
+      <div class="inventory-title">CHARGEMENT</div>
+      <div class="slot-group">
+        <div class="slot-group-title">Drones</div>
+        <div class="slot-row" id="loadout-drone"></div>
+      </div>
+      <div class="slot-group">
+        <div class="slot-group-title">Réacteurs</div>
+        <div class="slot-row" id="loadout-reactor"></div>
+      </div>
+      <div class="slot-group">
+        <div class="slot-group-title">Coque</div>
+        <div class="slot-row" id="loadout-hull"></div>
+      </div>
+      <div class="inventory-divider"></div>
+      <div class="inventory-title">INVENTAIRE</div>
+      <div class="slot-row" id="inventory-storage"></div>
+      <div class="footnote">Clic sur un objet stocké pour l'équiper · clic sur un objet équipé pour le retirer · I ou Echap pour fermer</div>
+    </div>
+  </div>
 
   <div id="menu-screen" class="screen">
     <div class="title">VOID&nbsp;RUNNER</div>
@@ -36,9 +61,9 @@
     <div class="panel">
       <div class="scrap-line">Ferraille totale &nbsp;<b id="menu-scrap">0</b></div>
       <button class="btn" onclick="startRun()">Nouvelle Partie</button>
-      <button class="btn" onclick="openShop('menu')">Atelier de Mods</button>
+      <button class="btn" onclick="openShop('menu')">Atelier</button>
     </div>
-    <div class="footnote">CTRL : replié / combat · Z : avancer · S : marche arrière · Q/D : dash latéral · MAJ : boost · Souris : viser · Clic / Espace : tirer</div>
+    <div class="footnote">Souris : viser · Z/S : avancer/reculer · Q/D : strafe · double-tap Z/S/Q/D : dash · Clic / Espace : tirer · I : inventaire</div>
   </div>
 
   <div id="levelup-screen" class="screen hidden">
@@ -72,7 +97,8 @@
   </div>
 
   <div id="shop-screen" class="screen hidden">
-    <div class="title" style="font-size:26px; letter-spacing:6px;">ATELIER DE MODS</div>
+    <div class="title" style="font-size:26px; letter-spacing:6px;">ATELIER</div>
+    <div class="subtitle">déblocage d'emplacements d'équipement</div>
     <div class="scrap-line">Ferraille disponible &nbsp;<b id="shop-scrap">0</b></div>
     <div class="panel shop-list" id="shop-list"></div>
     <button class="btn" style="width:300px; margin-top:16px;" onclick="closeShop()">Retour</button>

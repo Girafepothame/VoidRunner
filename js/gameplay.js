@@ -1,23 +1,47 @@
-import { Player, Bullet, Enemy, Asteroid, Particle, Shockwave, Orb, ScrapPickup, Turret, Drone, Orbital } from './entities.js';
-import { EXPLOSION_SUB_DEFS, LEVEL_STAT_GROWTH, LEVEL_UP_DEFS, meta } from './meta.js';
-import { showScreen, flashWaveBanner } from './ui.js';
-import { chunkManager } from './chunks.js';
+import { Player, Bullet, Enemy, Asteroid, Particle, Shockwave, Orb, ScrapPickup, EquipmentPickup, Turret, Drone, Orbital, HyperPortal } from './entities.js';
+import { EXPLOSION_SUB_DEFS, LEVEL_STAT_GROWTH, LEVEL_UP_DEFS, SLOT_DEFS, meta } from './meta.js';
+import { rollEquipment, recomputeEquipmentStats } from './equipment.js';
+import { showScreen, flashWaveBanner, buildInventoryUI } from './ui.js';
+import { chunkManager, CHUNK_SIZE } from './chunks.js';
+import gameData from './data/game.json' with { type: 'json' };
 
 // Gameplay state and logic: spawning, updates, collisions, particles
 export let gameState = 'menu'; // menu, playing, paused, levelup, gameover, shop
 export let shopReturnState = 'menu';
 export let player, run;
-export let bullets = [], enemyBullets = [], enemies = [], asteroids = [], xpOrbs = [], scrapPickups = [], particles = [], shockwaves = [], lightningArcs = [];
+export let bullets = [], enemyBullets = [], enemies = [], asteroids = [], xpOrbs = [], scrapPickups = [], equipmentPickups = [], shockwaves = [], lightningArcs = [];
 export let drones = [], orbitals = [], turrets = [];
+const BIOMES = gameData.biomes;
+const PORTAL_CONFIG = gameData.portal;
+const ENEMY_DEFS = gameData.enemies;
+const DANGER_CONFIG = gameData.danger;
+const FIRST_PORTAL_SCORE = PORTAL_CONFIG.firstScore;
+export let hyperPortal = null;
 export let keys = {};
 export let waveBannerTimer = 0;
 export let currentCards = [];
+// Overlay d'inventaire (touche I) : n'est volontairement PAS une vraie
+// pause. Voir main.js, qui ralentit la simulation (frame skip) plutôt que
+// de la stopper pendant que l'overlay est ouvert.
+export let inventoryOpen = false;
 // NOTE: WORLD_W / WORLD_H ne servent plus à borner le monde (celui-ci est
 // désormais infini, généré par chunks). Conservés uniquement si d'autres
 // fichiers (ex: ui.js, minimap) s'y réfèrent encore — vérifie ces usages.
 export let WORLD_W = 24000;
 export let WORLD_H = 16000;
 export let camX = 0, camY = 0;
+
+// --- Pool de particules --------------------------------------------------
+// Les particules (impacts, morts, explosions...) sont de loin l'entité la
+// plus créée/détruite du jeu : un simple burst en spawn/détruit des dizaines
+// en continu. Plutôt que new Particle() + push()/splice() (allocations et
+// GC en continu), on garde un tableau de taille fixe réutilisé à l'infini.
+// spawnBurst() écrit dans les slots existants au lieu d'en créer de
+// nouveaux ; updateParticles/drawParticles ne traitent que les slots actifs.
+const PARTICLE_POOL_SIZE = 600;
+export let particles = Array.from({ length: PARTICLE_POOL_SIZE }, () => new Particle(0, 0, 0, 0, 0, null));
+particles.forEach(p => { p.active = false; });
+let particleCursor = 0;
 
 // Wave banner timer accessors to avoid assigning to module namespace
 export function setWaveBannerTimer(n){ waveBannerTimer = n; }
@@ -28,12 +52,6 @@ export function tickWaveBannerTimer(){ if(waveBannerTimer>0) waveBannerTimer--; 
 export function setShopReturnState(v){ shopReturnState = v; }
 export function setGameState(s){ gameState = s; }
 export function getShopReturnState(){ return shopReturnState; }
-
-export function togglePlayerMode(){
-  if(!player) return;
-  player.mode = player.mode === 'folded' ? 'combat' : 'folded';
-  player.thrust = 0;
-}
 
 export function pauseRun(){
   if(gameState !== 'playing') return;
@@ -81,19 +99,30 @@ export function makePlayer(profileId='standard'){
 export function startRun(profileId='standard'){
   camX = 0; camY = 0;
   player = makePlayer(profileId);
-  run = { time:0, wave:1, kills:0, score:0, scrapEarned:0, spawnTimer:1, waveTotal:0, waveSpawned:0, interWaveTimer:0 };
-  bullets=[]; enemyBullets=[]; enemies=[]; asteroids=[]; xpOrbs=[]; scrapPickups=[]; particles=[]; shockwaves=[]; lightningArcs=[];
+  run = {
+    time:0, kills:0, score:0, scrapEarned:0, spawnTimer:1,
+    biome:0, nextPortalScore:FIRST_PORTAL_SCORE,
+    portalBoss:null, portalEvent:'hidden', portalTimer:0,
+  };
+  bullets=[]; enemyBullets=[]; enemies=[]; asteroids=[]; xpOrbs=[]; scrapPickups=[]; equipmentPickups=[]; shockwaves=[]; lightningArcs=[];
+  inventoryOpen = false;
+  hyperPortal = null;
+  for(const p of particles) p.active = false;
+  particleCursor = 0;
   chunkManager.reset(); // repart d'un monde vierge à chaque nouvelle run
   drones = Array.from({ length: player.droneCount }, (_, i) => new Drone(i * TWO_PI / Math.max(1, player.droneCount)));
   orbitals = Array.from({ length: player.orbitalCount }, (_, i) => new Orbital(i * TWO_PI / Math.max(1, player.orbitalCount)));
+  recomputeEquipmentStats(player); // loadout vide au départ, mais fixe hp/speed de base proprement
   turrets = createTurrets();
-  beginWave();
+  lastThreatTier = 0;
+  run.spawnTimer = computeSpawnInterval();
   gameState = 'playing';
   showScreen(null);
   document.getElementById('hud').classList.remove('hidden');
 }
 
 export function endRun(){
+  if(inventoryOpen) toggleInventory();
   gameState = 'gameover';
   const earned = run.scrapEarned;
   run.scrapEarned = earned;
@@ -104,19 +133,13 @@ export function endRun(){
   showScreen('gameover-screen');
 }
 
-export function beginWave(){
-  run.waveTotal = 4 + run.wave * 2;
-  run.waveSpawned = 0;
-  run.spawnTimer = 1;
-  flashWaveBanner('VAGUE ' + run.wave);
-}
-
 export function updateRun(){
   run.time += 1/60;
   updatePlayer();
-  updateWaveState();
+  updateSpawning();
+  updateThreatTier();
   updateWorld();
-  completeWaveIfNeeded();
+  updateHyperPortal();
   handlePlayerDefeat();
 }
 
@@ -127,17 +150,105 @@ export function updatePlayer(){
   handlePlayerWeapons();
 }
 
-function updateWaveState(){
-  if(run.interWaveTimer <= 0){ handleSpawning(); return; }
-  run.interWaveTimer--;
-  if(run.interWaveTimer === 0){ run.wave++; beginWave(); }
-}
-
 function updateWorld(){
   updateChunks();
   updateEnemies(); updateAsteroids(); updateDrones();
   updateOrbitals(); updateTurrets(); updateBullets(); updateEnemyBullets(); updateOrbs();
   updateParticles(); updateShockwaves(); checkCollisions();
+}
+
+function updateHyperPortal(){
+  if(!hyperPortal){
+    if(run.score < run.nextPortalScore) return;
+    const angle = random(TWO_PI);
+    const distance = random(650, 900);
+    const biome = BIOMES[run.biome % BIOMES.length];
+    hyperPortal = new HyperPortal(
+      player.x + Math.cos(angle) * distance,
+      player.y + Math.sin(angle) * distance,
+      biome.color,
+    );
+    run.portalEvent = 'found';
+    flashWaveBanner('PORTAIL HYPER-ESPACE');
+    return;
+  }
+
+  hyperPortal.update();
+  if(run.portalEvent === 'active'){
+    run.portalTimer--;
+    if(run.portalTimer <= 0){
+      run.portalEvent = 'cleanup';
+      flashWaveBanner('DERNIÈRE VAGUE');
+    }
+    return;
+  }
+  if(run.portalEvent === 'cleanup'){
+    if(enemies.length === 0){
+      run.portalEvent = 'ready';
+      flashWaveBanner('PORTAIL PRÊT');
+    }
+    return;
+  }
+  if(run.portalEvent === 'found' && isInRange(hyperPortal, player, hyperPortal.radius + 18)){
+    activatePortalEvent();
+    return;
+  }
+  if(run.portalEvent === 'ready' && isInRange(hyperPortal, player, hyperPortal.radius + 18)) completePortalBoss();
+}
+
+function activatePortalEvent(){
+  const durationSeconds = constrain(
+    Math.round(PORTAL_CONFIG.eventDurationMaxSeconds - difficultyScale() * 4),
+    PORTAL_CONFIG.eventDurationMinSeconds,
+    PORTAL_CONFIG.eventDurationMaxSeconds,
+  );
+  run.portalEvent = 'active';
+  run.portalTimer = durationSeconds * 60;
+  spawnPortalBoss();
+  flashWaveBanner('TÉLÉPORTEUR ACTIVÉ');
+}
+
+function spawnPortalBoss(){
+  const angle = random(TWO_PI);
+  const distance = 260;
+  const scale = difficultyScale();
+  const hp = Math.round(260 + scale * 90);
+  const biome = BIOMES[run.biome % BIOMES.length];
+  const boss = new Enemy({
+    x: player.x + Math.cos(angle) * distance,
+    y: player.y + Math.sin(angle) * distance,
+    type:'chaser', isPortalBoss:true,
+    hp, maxHp:hp,
+    speed: Math.min(1.1, player.speed * 0.55),
+    r: 30, dmg: 24, xp: 20,
+    color: biome.color, score: 250,
+    fireCooldown: 90, phase: random(TWO_PI), angle:0,
+  });
+  enemies.push(boss);
+  run.portalBoss = boss;
+  flashWaveBanner('BOSS DU PORTAIL');
+  spawnBurst(hyperPortal.x, hyperPortal.y, color(biome.color[0], biome.color[1], biome.color[2]), 28);
+}
+
+function completePortalBoss(){
+  const convertedXp = Math.floor(run.scrapEarned / 10);
+  if(convertedXp > 0){
+    run.scrapEarned -= convertedXp * 10;
+    gainXp(convertedXp);
+  }
+  run.biome += 1;
+  run.nextPortalScore = run.score + FIRST_PORTAL_SCORE + run.biome * PORTAL_CONFIG.nextBiomeScore;
+  hyperPortal = null;
+  run.portalBoss = null;
+  run.portalEvent = 'hidden';
+  run.portalTimer = 0;
+  enemies = [];
+  enemyBullets = [];
+  run.spawnTimer = 45;
+  const biome = BIOMES[run.biome % BIOMES.length];
+  flashWaveBanner('BIOME ' + biome.name);
+  spawnBurst(player.x, player.y, color(biome.color[0], biome.color[1], biome.color[2]), 34);
+  triggerShake(8, 14);
 }
 
 // Charge/décharge les chunks autour du joueur et synchronise leurs entités
@@ -161,11 +272,6 @@ function removeByChunkKey(list, unloadedSet){
   }
 }
 
-function completeWaveIfNeeded(){
-  const waveComplete = run.interWaveTimer === 0 && run.waveSpawned >= run.waveTotal && enemies.length === 0;
-  if(waveComplete){ run.interWaveTimer = 180; flashWaveBanner('VAGUE TERMINEE'); }
-}
-
 function handlePlayerDefeat(){
   if(player.hp > 0) return;
   if(player.lives > 0){
@@ -185,6 +291,7 @@ function updateCameraAndAim(){
   // dans des bornes de monde fixes.
   camX = player.x - width/2;
   camY = player.y - height/2;
+  applyShake();
   const targetAngle = atan2(mouseY + camY - player.y, mouseX + camX - player.x);
   let delta = targetAngle - player.angle;
   while(delta > PI) delta -= TWO_PI;
@@ -192,35 +299,113 @@ function updateCameraAndAim(){
   player.angle += constrain(delta, -0.22, 0.22);
 }
 
+// Micro screen-shake (dash, impacts...) : décale légèrement la caméra
+// pendant quelques frames plutôt que de la clamper à une valeur fixe.
+let shakeTimer = 0, shakeMagnitude = 0;
+function triggerShake(magnitude, duration){
+  shakeMagnitude = magnitude; shakeTimer = duration;
+}
+function applyShake(){
+  if(shakeTimer <= 0) return;
+  camX += random(-shakeMagnitude, shakeMagnitude);
+  camY += random(-shakeMagnitude, shakeMagnitude);
+  shakeTimer--;
+}
+
+// --- Mouvement -------------------------------------------------------------
+// Contrôle unifié (plus de mode replié/combat) : la souris vise en
+// permanence, Z/S avancent ou reculent le long de cet axe de visée, Q/D
+// orbitent perpendiculairement (strafe). Le tir reste indépendant du
+// déplacement (voir handlePlayerWeapons).
 function updateMovement(){
-  if(player.mode === 'folded') updateFoldedMovement();
-  else updateCombatMovement();
-}
-
-function updateFoldedMovement(){
-  const forward = keys['z'] ? 1 : (keys['s'] ? -0.32 : 0);
-  const boosting = keys['shift'] && player.boost > 0 && forward > 0;
-  const speed = player.speed * (boosting ? 2.8 : 1);
-  player.x += Math.cos(player.angle) * forward * speed;
-  player.y += Math.sin(player.angle) * forward * speed;
   updateDash();
-  player.boost = boosting ? Math.max(0, player.boost - 1.8) : Math.min(player.boostMax, player.boost + 0.65);
-  player.thrust = forward > 0 ? (boosting ? 1.5 : 1) : forward < 0 ? 0.35 : 0;
+  if(player.dashTimer > 0) return; // l'impulsion de dash prend le pas sur le déplacement normal
+  applyDirectionalMovement();
 }
 
-function updateCombatMovement(){
-  const horizontal = (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['q'] || keys['arrowleft'] ? 1 : 0);
-  const vertical = (keys['s'] || keys['arrowdown'] ? 1 : 0) - (keys['z'] || keys['arrowup'] ? 1 : 0);
-  const length = Math.hypot(horizontal, vertical) || 1;
-  player.x += horizontal / length * player.speed;
-  player.y += vertical / length * player.speed;
-  player.boost = Math.min(player.boostMax, player.boost + 0.65);
-  player.thrust = Math.min(1, Math.abs(horizontal) + Math.abs(vertical));
+function applyDirectionalMovement(){
+  const forward = (keys['z'] ? 1 : 0) - (keys['s'] ? 1 : 0);
+  const strafe = (keys['d'] ? 1 : 0) - (keys['q'] ? 1 : 0);
+  const boosting = keys['shift'] && player.boost > 0 && (forward !== 0 || strafe !== 0);
+  player.boost = boosting ? Math.max(0, player.boost - 1.8) : Math.min(player.boostMax, player.boost + 0.65 + player.boostRegenBonus);
+  const hasInput = forward !== 0 || strafe !== 0;
+  const acceleration = 0.34;
+  const deceleration = 0.12;
+  if(hasInput){
+    const forwardMultiplier = forward > 0 ? 1.25 : 1;
+    const speed = player.speed * forwardMultiplier * (boosting ? 1.8 : 1);
+    const length = Math.hypot(forward, strafe) || 1;
+    const forwardX = Math.cos(player.angle), forwardY = Math.sin(player.angle);
+    const strafeX = Math.cos(player.angle + HALF_PI), strafeY = Math.sin(player.angle + HALF_PI);
+    const targetVx = (forwardX*forward + strafeX*strafe) / length * speed;
+    const targetVy = (forwardY*forward + strafeY*strafe) / length * speed;
+    player.vx += constrain(targetVx - player.vx, -acceleration, acceleration);
+    player.vy += constrain(targetVy - player.vy, -acceleration, acceleration);
+    player.thrust = boosting ? 1.5 : 1;
+  } else {
+    player.vx *= Math.max(0, 1 - deceleration);
+    player.vy *= Math.max(0, 1 - deceleration);
+    player.thrust = 0;
+  }
+  player.x += player.vx;
+  player.y += player.vy;
 }
+
+// --- Dash --------------------------------------------------------------
+// Une charge unique, courte et violente (impulsion de ~0.15s, pas un
+// sprint). Déclenchée par un double-tap sur Z/S/Q/D (voir
+// registerDirectionTap, appelée depuis main.js à chaque appui). Se recharge
+// automatiquement avec le temps, et plus vite via l'agressivité : tuer un
+// ennemi, dasher à travers un ennemi ou un projectile, ou tuer PENDANT un
+// dash (recharge instantanée) — de quoi enchaîner dash → kill → dash.
+const DASH_COOLDOWN_FRAMES = 60; // ~1s à 60fps sans bonus de recharge
+const DASH_DURATION_FRAMES = 10; // ~0.16s : une impulsion, pas un déplacement soutenu
+const DOUBLE_TAP_WINDOW = 16;    // ~0.26s à 60fps pour valider un double-tap
+const lastTapFrame = { z:-999, s:-999, q:-999, d:-999 };
+let dashGrazedEnemies = new Set();
+
+export function registerDirectionTap(direction){
+  if(gameState !== 'playing' || inventoryOpen || !player) return;
+  const now = frameCount;
+  if(now - lastTapFrame[direction] <= DOUBLE_TAP_WINDOW){
+    lastTapFrame[direction] = -999;
+    requestDash(direction);
+  } else {
+    lastTapFrame[direction] = now;
+  }
+}
+
+function directionToAngle(direction){
+  switch(direction){
+    case 's': return player.angle + PI;
+    case 'q': return player.angle - HALF_PI;
+    case 'd': return player.angle + HALF_PI;
+    default: return player.angle; // 'z' = avant, direction par défaut
+  }
+}
+
+function requestDash(direction){
+  if(player.dashCooldownTimer > 0 || player.dashTimer > 0) return;
+  player.dashAngle = directionToAngle(direction);
+  player.dashDistance = player.speed * 15; // "clic -> BOOM -> nouvelle position"
+  player.dashProgress = 0; player.dashAppliedDistance = 0;
+  player.dashDuration = DASH_DURATION_FRAMES;
+  player.dashTimer = DASH_DURATION_FRAMES;
+  player.dashCooldownTimer = DASH_COOLDOWN_FRAMES;
+  player.invuln = Math.max(player.invuln, DASH_DURATION_FRAMES + 2);
+  dashGrazedEnemies = new Set();
+  triggerShake(4, 6);
+  spawnBurst(player.x, player.y, color(180,107,255), 14);
+}
+
+function rechargeDashPercent(fraction){
+  player.dashCooldownTimer = Math.max(0, player.dashCooldownTimer - DASH_COOLDOWN_FRAMES*fraction);
+}
+function rechargeDashFull(){ player.dashCooldownTimer = 0; }
 
 function updateDash(){
-  if(player.dashCooldown > 0) player.dashCooldown--;
-  if(player.dashTimer <= 0){ startDashIfRequested(); return; }
+  if(player.dashCooldownTimer > 0) player.dashCooldownTimer--;
+  if(player.dashTimer <= 0) return;
   player.dashProgress = Math.min(1, player.dashProgress + 1 / player.dashDuration);
   const easedProgress = 1 - Math.pow(1 - player.dashProgress, 4);
   const distance = lerp(0, player.dashDistance, easedProgress);
@@ -228,23 +413,33 @@ function updateDash(){
   player.x += Math.cos(player.dashAngle) * step;
   player.y += Math.sin(player.dashAngle) * step;
   player.dashAppliedDistance = distance;
-  player.dashTimer--; player.dashHitTimer--;
-  if(player.dashHitTimer <= 0){
-    for(const enemy of enemies.slice()){
-      if(Math.hypot(enemy.x-player.x, enemy.y-player.y) < enemy.r + 18) damageEnemy(enemy, player.dashDamage);
-    }
-    player.dashHitTimer = 4;
-  }
+  player.dashTimer--;
+  spawnBurst(player.x, player.y, color(180,107,255,160), 2); // légère traînée
+  checkDashGrazes();
 }
 
-function startDashIfRequested(){
-  if(player.dashCooldown > 0) return;
-  const direction = keys['d'] ? 1 : (keys['q'] ? -1 : 0);
-  if(direction === 0) return;
-  player.dashAngle = player.angle + HALF_PI * direction;
-  player.dashDistance = player.speed * 9;
-  player.dashProgress = 0; player.dashAppliedDistance = 0;
-  player.dashTimer = player.dashDuration; player.dashHitTimer = 0; player.dashCooldown = 45;
+// "Dash à travers" un ennemi ou un projectile ennemi : détecté une seule
+// fois par cible et par dash (dashGrazedEnemies), récompensé en recharge de
+// dash plutôt qu'en dégâts (voir description du système : ça doit se sentir
+// comme une esquive réflexe, pas juste une attaque de plus).
+function checkDashGrazes(){
+  for(const enemy of enemies){
+    if(dashGrazedEnemies.has(enemy)) continue;
+    if(Math.hypot(enemy.x-player.x, enemy.y-player.y) < enemy.r + 18){
+      dashGrazedEnemies.add(enemy);
+      if(player.dashDamage > 0) damageEnemy(enemy, player.dashDamage);
+      rechargeDashPercent(0.25);
+      spawnBurst(player.x, player.y, color(180,107,255), 6);
+    }
+  }
+  for(let i=enemyBullets.length-1;i>=0;i--){
+    const bullet = enemyBullets[i];
+    if(Math.hypot(bullet.x-player.x, bullet.y-player.y) < bullet.size + 16){
+      enemyBullets.splice(i,1);
+      rechargeDashPercent(0.5);
+      spawnBurst(player.x, player.y, color(57,255,176), 8);
+    }
+  }
 }
 
 function updatePlayerResources(){
@@ -312,11 +507,22 @@ export function triggerChainLightning(source){
 export function updateDrones(){
   for(const drone of drones) drone.update(player, enemies, bullets);
 }
+// Les tourelles latérales ("drones" de combat, catégorie d'équipement
+// 'drone') sont entièrement pilotées par le loadout : convention index 0 =
+// côté gauche, index 1 = côté droit. Reconstruites à chaque equip/unequip
+// via refreshTurrets().
 function createTurrets(){
   const result = [];
-  if(player.turretRight > 0) result.push(new Turret(1));
-  if(player.turretLeft > 0) result.push(new Turret(-1));
+  const slots = player.loadout.drone;
+  if(slots[0]) result.push(makeTurretFromEquipment(slots[0], -1));
+  if(slots[1]) result.push(makeTurretFromEquipment(slots[1], 1));
   return result;
+}
+function makeTurretFromEquipment(item, side){
+  const turret = new Turret(side);
+  turret.dmgMult = item.stats.dmgMult;
+  turret.fireRate = item.stats.fireRate;
+  return turret;
 }
 export function refreshTurrets(){
   turrets = createTurrets();
@@ -325,6 +531,63 @@ function updateTurrets(){
   const targetX = mouseX + camX;
   const targetY = mouseY + camY;
   for(const turret of turrets) turret.update(player, targetX, targetY, bullets);
+}
+
+// --- Équipement : equip/unequip, inventaire en run, outils de debug ------
+// Équipe un objet stocké au premier slot débloqué ET libre de sa catégorie.
+// Ne fait rien (renvoie false) si aucun slot n'est disponible.
+export function equipFromInventory(inventoryIndex){
+  const item = player.inventory[inventoryIndex];
+  if(!item) return false;
+  const category = item.category;
+  const unlockedCount = meta.unlockedSlots[category] || 0;
+  const slots = player.loadout[category];
+  let targetIndex = -1;
+  for(let i=0;i<unlockedCount;i++){ if(!slots[i]){ targetIndex = i; break; } }
+  if(targetIndex === -1) return false;
+  slots[targetIndex] = item;
+  player.inventory[inventoryIndex] = null;
+  recomputeEquipmentStats(player);
+  refreshTurrets();
+  return true;
+}
+
+// Retire un objet équipé vers l'inventaire. Ne fait rien si l'inventaire
+// est plein (on ne perd jamais un objet en le déséquipant).
+export function unequipItem(category, index){
+  const item = player.loadout[category][index];
+  if(!item) return false;
+  const freeSlot = player.inventory.findIndex(slot => slot === null);
+  if(freeSlot === -1) return false;
+  player.inventory[freeSlot] = item;
+  player.loadout[category][index] = null;
+  recomputeEquipmentStats(player);
+  refreshTurrets();
+  return true;
+}
+
+// Ouvre/ferme l'overlay d'inventaire pendant la run (voir main.js pour le
+// ralenti associé). N'agit que si une run est en cours.
+export function toggleInventory(){
+  if(gameState !== 'playing') return;
+  inventoryOpen = !inventoryOpen;
+  const overlay = document.getElementById('inventory-screen');
+  if(overlay) overlay.classList.toggle('hidden', !inventoryOpen);
+  if(inventoryOpen) buildInventoryUI();
+}
+
+// Outils de debug (menu F3) pour tester le système sans attendre un drop
+// de mini-boss ou grinder du scrap à l'atelier.
+export function debugAddEquipment(category){
+  const item = rollEquipment(category, difficultyScale());
+  const freeSlot = player.inventory.findIndex(slot => slot === null);
+  if(freeSlot !== -1) player.inventory[freeSlot] = item;
+  return item;
+}
+export function debugUnlockSlot(category){
+  const def = SLOT_DEFS[category];
+  if(!def) return;
+  if((meta.unlockedSlots[category] || 0) < def.max) meta.unlockedSlots[category] += 1;
 }
 export function updateOrbitals(){
   for(const orbital of orbitals){
@@ -335,15 +598,69 @@ export function updateOrbitals(){
   }
 }
 
-export function difficultyScale(){ return 1 + (run.wave-1)*0.18; }
-export function handleSpawning(){
-  if(run.waveSpawned >= run.waveTotal) return;
+// --- Danger continu : distance à l'origine + temps de survie -------------
+// Option "hybride" façon Risk of Rain : là où RoR fait grimper le danger
+// uniquement avec le temps (tout le stage devient plus dur pendant que vous
+// hésitez à partir), ici on combine deux sources qui s'additionnent :
+//  - une composante SPATIALE : s'éloigner de l'origine augmente le danger de
+//    base, cohérent avec le monde infini par chunks (mêmes distances que la
+//    densité d'astéroïdes dans chunks.js) ;
+//  - une composante TEMPORELLE : même en restant proche de l'origine, le
+//    danger grimpe lentement avec la durée de la run, pour empêcher de
+//    camper indéfiniment une zone sûre.
+// Le résultat (>= 1) pilote à la fois les stats des ennemis, l'intervalle
+// de spawn et le nombre max d'ennemis simultanés.
+function getDistanceDanger(){
+  if(!player) return 0;
+  const distance = Math.hypot(player.x, player.y);
+  return (distance / CHUNK_SIZE) * DANGER_CONFIG.distancePerChunk;
+}
+
+function getTimeDanger(){
+  if(!run) return 0;
+  return run.time * DANGER_CONFIG.timePerSecond;
+}
+
+export function difficultyScale(){ return 1 + getDistanceDanger() + getTimeDanger() + (run ? run.biome * DANGER_CONFIG.biomeBonus : 0); }
+
+// Nombre d'ennemis simultanés autorisés : grandit avec le danger, plafonné
+// pour rester jouable et pour ne pas dégrader les perfs (voir grille
+// spatiale de collision, qui reste efficace même avec ce plafond haut).
+function getMaxEnemies(){
+  return Math.min(60, 8 + Math.floor(difficultyScale() * 6));
+}
+
+// Intervalle (en frames) avant le prochain spawn : plus le danger est élevé,
+// plus les ennemis arrivent vite. Bornes pour éviter un flux instantané ou
+// à l'inverse un désert d'ennemis en tout début de run.
+function computeSpawnInterval(){
+  return constrain(Math.round(110 / difficultyScale()), 16, 110);
+}
+
+export function updateSpawning(){
+  if(run.portalEvent === 'cleanup' || run.portalEvent === 'ready') return;
+  maybeSpawnMiniboss();
+  if(enemies.length >= getMaxEnemies()){
+    run.spawnTimer = Math.min(run.spawnTimer, 20);
+    return;
+  }
   run.spawnTimer--;
   if(run.spawnTimer <= 0){
-    run.spawnTimer = 90;
     spawnEnemy();
     if(random() < 0.35) spawnAsteroid();
-    run.waveSpawned++;
+    run.spawnTimer = computeSpawnInterval();
+  }
+}
+
+// Suivi du palier de danger courant : à chaque franchissement d'un palier
+// entier (1 -> 2 -> 3...), on flashe une bannière pour donner au joueur un
+// repère de progression, sans réintroduire de notion de "vague".
+let lastThreatTier = 0;
+function updateThreatTier(){
+  const tier = Math.floor(difficultyScale());
+  if(tier > lastThreatTier){
+    lastThreatTier = tier;
+    flashWaveBanner('MENACE ' + tier);
   }
 }
 
@@ -358,8 +675,9 @@ export function spawnAsteroid(){
   else { x=player.x-width/2-margin; y=player.y+random(-height/2, height/2); }
   const rewardType = random() < 0.5 ? 'xp' : 'scrap';
   const radius = random(20, 34);
+  const asteroidHp = Math.round(10 + (difficultyScale() - 1) * 12);
   asteroids.push(new Asteroid({ x, y, vx:random(-0.45, 0.45), vy:random(-0.45, 0.45), r:radius,
-    hp:Math.round(10 + run.wave * 2), maxHp:Math.round(10 + run.wave * 2), rewardType,
+    hp:asteroidHp, maxHp:asteroidHp, rewardType,
     reward:Math.max(1, Math.round(radius / 8)) }));
 }
 
@@ -370,19 +688,85 @@ export function spawnEnemy(){
   else if(edge===1){ x=player.x+width/2+margin; y=player.y+random(-height/2,height/2); }
   else if(edge===2){ x=player.x + random(-width/2,width/2); y=player.y+height/2+margin; }
   else { x=player.x-width/2-margin; y=player.y+random(-height/2,height/2); }
-  const roll = random(); let type = 'chaser'; if(run.wave>=2 && roll<0.28) type='shooter'; else if(run.wave>=3 && roll<0.5) type='zigzag';
   const scale = difficultyScale();
+  const roll = random(); let type = 'chaser';
+  if(scale>=2.8 && roll<0.15) type='sniper';
+  else if(scale>=2.2 && roll<0.5) type='zigzag';
+  else if(scale>=1.6 && roll<0.28) type='shooter';
   // reduced base speeds and gentler difficulty scaling to slow enemies
   // base speeds lowered; final speed capped relative to player speed so enemies cannot match/overrun player
-  const base = { chaser: { hp: 10, speed: 1.0, r: 13, dmg: 10, xp:1, color:[255,79,126], score:10 }, shooter:{ hp: 14, speed: 0.7, r: 15, dmg: 8, xp:3, color:[255,140,80], score:16 }, zigzag: { hp: 6,  speed: 1.2, r: 9, dmg: 8, xp:2, color:[190,100,255], score:14 }, }[type];
+  const base = ENEMY_DEFS[type];
   const speedMult = 1 + (scale - 1) * 0.04; // gentler scaling
   const desiredSpeed = base.speed * speedMult;
   const maxAllowed = (player && player.speed) ? player.speed * 0.75 : desiredSpeed; // keep enemies slower than player
   const finalSpeed = Math.min(desiredSpeed, maxAllowed);
-  enemies.push(new Enemy({ x,y, type, hp: Math.max(1, base.hp*scale), maxHp: Math.max(1, base.hp*scale), speed: finalSpeed, r: base.r, dmg: base.dmg, xp: base.xp, color: base.color, score: base.score, fireCooldown: random(60,120), phase: random(TWO_PI), angle:0 }));
+  enemies.push(new Enemy({ x,y, type, hp: Math.max(1, base.hp*scale), maxHp: Math.max(1, base.hp*scale), speed: finalSpeed, r: base.radius, dmg: base.damage, xp: base.xp, color: base.color, score: base.score, aggroRange: base.aggroRange, fireCooldown: random(60,120), phase: random(TWO_PI), angle:0 }));
 }
 
-export function updateEnemies(){ for(const e of enemies) e.update(player, run, enemyBullets); }
+export function updateEnemies(){
+  for(const e of enemies){
+    const fireCallback = e.type === 'sniper' ? applySniperLaser : enemyBullets;
+    e.update(player, run, fireCallback);
+  }
+}
+
+function applySniperLaser(sniper){
+  const dx = player.x - sniper.x;
+  const dy = player.y - sniper.y;
+  const distanceAlongLaser = dx * Math.cos(sniper.laserAngle) + dy * Math.sin(sniper.laserAngle);
+  if(distanceAlongLaser < 0) return;
+  const closestX = sniper.x + Math.cos(sniper.laserAngle) * distanceAlongLaser;
+  const closestY = sniper.y + Math.sin(sniper.laserAngle) * distanceAlongLaser;
+  if(Math.hypot(player.x - closestX, player.y - closestY) > 14) return;
+  if(player.invuln > 0) return;
+  player.hp -= sniper.dmg * 1.8;
+  player.invuln = 45;
+  spawnBurst(player.x, player.y, color(255,80,80), 14);
+}
+
+// --- Mini-boss : seule source de drop d'équipement ------------------------
+// Contrairement aux ennemis normaux (spawn continu piloté par le danger),
+// les mini-boss sont des apparitions rares et ponctuelles : un seul à la
+// fois, avec un délai minimum entre deux apparitions. Leur mort est la
+// SEULE façon d'obtenir de l'équipement dans le jeu.
+const MINIBOSS_MIN_INTERVAL = 70; // secondes minimum entre deux apparitions
+let lastMinibossTime = -999;
+
+function maybeSpawnMiniboss(){
+  if(run.portalBoss || run.portalEvent === 'active') return;
+  if(enemies.some(e => e.isMiniboss)) return;
+  if(run.time - lastMinibossTime < MINIBOSS_MIN_INTERVAL) return;
+  if(random() < 0.006){
+    spawnMiniboss();
+    lastMinibossTime = run.time;
+  }
+}
+
+function spawnMiniboss(){
+  const edge = floor(random(4)); let x,y;
+  const margin = 160;
+  if(edge===0){ x=player.x + random(-width/2,width/2); y=player.y-height/2-margin; }
+  else if(edge===1){ x=player.x+width/2+margin; y=player.y+random(-height/2,height/2); }
+  else if(edge===2){ x=player.x + random(-width/2,width/2); y=player.y+height/2+margin; }
+  else { x=player.x-width/2-margin; y=player.y+random(-height/2,height/2); }
+  const scale = difficultyScale();
+  enemies.push(new Enemy({
+    x, y, type:'chaser', isMiniboss:true,
+    hp: Math.round(50 + scale*22), maxHp: Math.round(50 + scale*22),
+    speed: Math.min(0.85, (player ? player.speed*0.5 : 0.85)),
+    r: 30, dmg: 20, xp: 14, color:[255,214,79], score:140,
+    fireCooldown: random(60,120), phase: random(TWO_PI), angle:0,
+  }));
+  flashWaveBanner('MINI-BOSS EN APPROCHE');
+}
+
+function dropEquipment(x, y){
+  const categories = Object.keys(SLOT_DEFS);
+  const category = categories[Math.floor(random(categories.length))];
+  const item = rollEquipment(category, difficultyScale());
+  equipmentPickups.push(new EquipmentPickup(x, y, item));
+}
+
 export function updateAsteroids(){
   for(let i=asteroids.length-1;i>=0;i--){
     const asteroid = asteroids[i];
@@ -403,12 +787,17 @@ export function updateBullets(){
   }
 }
 
+// Distance au carré : évite un Math.hypot/sqrt à chaque appel. Ces checks de
+// portée tournent des centaines de fois par frame (orbes, orbitaux, tourelles,
+// collisions joueur/ennemis...) donc c'est un des points chauds du jeu.
 function isInRange(first, second, range){
-  return Math.hypot(first.x-second.x, first.y-second.y) < range;
+  const dx = first.x - second.x, dy = first.y - second.y;
+  return dx*dx + dy*dy < range*range;
 }
 
 function isFarFromPlayer(entity, maxDist){
-  return Math.hypot(entity.x - player.x, entity.y - player.y) > maxDist;
+  const dx = entity.x - player.x, dy = entity.y - player.y;
+  return dx*dx + dy*dy > maxDist*maxDist;
 }
 
 function isOutsideScreen(entity, margin){
@@ -473,6 +862,7 @@ function getEnemyStrength(enemy){
 export function updateOrbs(){
   collectXpOrbs();
   collectScrapPickups();
+  collectEquipmentPickups();
 }
 function collectXpOrbs(){
   for(let i=xpOrbs.length-1;i>=0;i--){
@@ -486,15 +876,29 @@ function collectScrapPickups(){
     if(isInRange(pickup, player, 16)){ run.scrapEarned += pickup.amount; run.score += pickup.amount * 5; scrapPickups.splice(i, 1); }
   }
 }
-export function drawOrbs(){ for(const o of xpOrbs) o.draw(); for(const o of scrapPickups) o.draw(); }
+function collectEquipmentPickups(){
+  for(let i=equipmentPickups.length-1;i>=0;i--){
+    const pickup = equipmentPickups[i]; pickup.update(player);
+    if(!isInRange(pickup, player, 18)) continue;
+    const freeSlot = player.inventory.findIndex(slot => slot === null);
+    if(freeSlot !== -1){
+      player.inventory[freeSlot] = pickup.item;
+      flashWaveBanner('OBJET RÉCUPÉRÉ');
+    } else {
+      flashWaveBanner('INVENTAIRE PLEIN');
+    }
+    equipmentPickups.splice(i, 1);
+  }
+}
+export function drawOrbs(){ for(const o of xpOrbs) o.draw(); for(const o of scrapPickups) o.draw(); for(const o of equipmentPickups) o.draw(); }
 
 export function gainXp(n){
   player.xp += n; run.score += 3;
   if(player.xp >= player.xpNeeded){
     player.xp -= player.xpNeeded;
     player.level += 1;
-    player.maxHp += LEVEL_STAT_GROWTH.maxHp;
-    player.hp = Math.min(player.maxHp, player.hp + LEVEL_STAT_GROWTH.maxHp);
+    player.baseMaxHp += LEVEL_STAT_GROWTH.maxHp;
+    recomputeEquipmentStats(player); // met à jour maxHp (base + bonus équipement) et soigne d'autant
     player.lastDamageGain = LEVEL_STAT_GROWTH.dmg + player.dmgPerLevel;
     player.dmg += player.lastDamageGain;
     player.fireRate = Math.max(LEVEL_STAT_GROWTH.minFireRate, player.fireRate - LEVEL_STAT_GROWTH.fireRate);
@@ -522,7 +926,8 @@ function triggerLevelUp(){
   }
   const equipment = document.getElementById('level-equipment');
   if(equipment){
-    equipment.innerHTML = `<div class="level-equipment-title">ÉQUIPEMENTS</div><div class="level-ship-preview"><div class="level-ship-preview-body"></div></div><div class="level-equipment-list"><div><span>Tourelles</span><b>${player.turretRight + player.turretLeft}</b></div><div><span>Drones</span><b>${player.droneCount}</b></div><div><span>Orbitaux</span><b>${player.orbitalCount}</b></div></div>`;
+    const equippedDrones = player.loadout.drone.filter(Boolean).length;
+    equipment.innerHTML = `<div class="level-equipment-title">ÉQUIPEMENTS</div><div class="level-ship-preview"><div class="level-ship-preview-body"></div></div><div class="level-equipment-list"><div><span>Drones</span><b>${equippedDrones}</b></div><div><span>Drones orbitaux</span><b>${player.orbitalCount}</b></div></div>`;
     const shipBody = equipment.querySelector('.level-ship-preview-body');
     const shape = player.profile.shape;
     const xValues = shape.map(([x]) => x);
@@ -560,18 +965,31 @@ function triggerLevelUp(){
   showScreen('levelup-screen');
 }
 
-export function spawnBurst(x,y,col,n){ for(let i=0;i<n;i++){ const a=random(TWO_PI), sp=random(1,5); particles.push(new Particle(x,y,cos(a)*sp,sin(a)*sp,30+random(20),col)); } }
+// spawnBurst n'alloue plus de Particle : on recycle des slots du pool en
+// boucle (round-robin). Si le pool est "plein" (toutes les particules du
+// dernier tour sont encore vivantes), on écrase les plus anciennes — un burst
+// visuel perdu de temps en temps est invisible à l'écran, contrairement à un
+// stutter de GC.
+export function spawnBurst(x,y,col,n){
+  for(let i=0;i<n;i++){
+    const a=random(TWO_PI), sp=random(1,5);
+    const p = particles[particleCursor];
+    particleCursor = (particleCursor + 1) % particles.length;
+    p.reset(x, y, cos(a)*sp, sin(a)*sp, 30+random(20), col);
+  }
+}
 export function updateParticles(){
-  for(let i=particles.length-1;i>=0;i--){
-    const particle = particles[i]; particle.update();
-    if(particle.life <= 0) particles.splice(i, 1);
+  for(const p of particles){
+    if(!p.active) continue;
+    p.update();
+    if(p.life <= 0) p.active = false;
   }
   updateLightningArcs();
 }
 export function updateShockwaves(){ for(let i=shockwaves.length-1;i>=0;i--){ const wave=shockwaves[i]; wave.update(); if(wave.life<=0) shockwaves.splice(i,1); } }
 export function drawParticles(){
   noStroke();
-  for(const particle of particles) particle.draw();
+  for(const p of particles){ if(p.active) p.draw(); }
   for(const wave of shockwaves) wave.draw();
   drawLightningArcs();
 }
@@ -593,7 +1011,20 @@ function drawLightningArcs(){
   }
 }
 
-export function damageEnemy(e, damage){ e.hp -= damage; if(e.hp<=0){ run.score += e.score; run.kills += 1; spawnBurst(e.x,e.y, color(e.color[0],e.color[1],e.color[2]), 16); spawnPickupsFrom(e); enemies.splice(enemies.indexOf(e),1); return true; } return false; }
+export function damageEnemy(e, damage){
+  e.hp -= damage;
+  if(e.hp<=0){
+    run.score += e.score; run.kills += 1;
+    spawnBurst(e.x,e.y, color(e.color[0],e.color[1],e.color[2]), e.isMiniboss ? 34 : 16);
+    spawnPickupsFrom(e);
+    if(e.isMiniboss) dropEquipment(e.x, e.y);
+    if(e.isPortalBoss) run.portalBoss = null;
+    if(player.dashTimer > 0) rechargeDashFull(); else rechargeDashPercent(0.2);
+    enemies.splice(enemies.indexOf(e),1);
+    return true;
+  }
+  return false;
+}
 export function damageAsteroid(asteroid, damage){
   asteroid.hp -= damage;
   if(asteroid.hp > 0) return false;
@@ -638,13 +1069,73 @@ function ricochetFrom(b, target){
   return true;
 }
 
+// --- Grille spatiale pour les collisions balles ↔ ennemis/astéroïdes ------
+// Sans ça, chaque balle est testée contre TOUS les ennemis puis TOUS les
+// astéroïdes chaque frame : avec le monde infini par chunks, le nombre
+// d'astéroïdes chargés peut monter à plusieurs centaines, et le coût devient
+// O(bullets × entities). La grille regroupe les entités par cellule ; pour
+// chaque balle on ne teste que les cellules réellement traversées par son
+// déplacement de la frame (previousX/Y -> x/y), plus une marge de sécurité.
+const COLLISION_CELL_SIZE = 150;
+// Marge ajoutée à la boîte englobante d'une balle pour être sûr de couvrir
+// le plus grand rayon d'entité pouvant être touché (gros astéroïde ~42 + un
+// peu de jeu).
+const COLLISION_QUERY_MARGIN = 70;
+
+function cellKeyOf(cx, cy){ return cx + '_' + cy; }
+
+function buildSpatialGrid(list){
+  const grid = new Map();
+  for(const item of list){
+    const cx = Math.floor(item.x / COLLISION_CELL_SIZE);
+    const cy = Math.floor(item.y / COLLISION_CELL_SIZE);
+    const key = cellKeyOf(cx, cy);
+    let bucket = grid.get(key);
+    if(!bucket){ bucket = []; grid.set(key, bucket); }
+    bucket.push(item);
+  }
+  return grid;
+}
+
+// Renvoie les entités des cellules couvrant le segment parcouru par la balle
+// cette frame (utile car bulletSpeed peut dépasser la taille d'une cellule).
+function queryGridForBullet(grid, bullet){
+  if(grid.size === 0) return EMPTY_ARRAY;
+  const x0 = bullet.previousX ?? bullet.x;
+  const y0 = bullet.previousY ?? bullet.y;
+  const minX = Math.min(x0, bullet.x) - COLLISION_QUERY_MARGIN;
+  const maxX = Math.max(x0, bullet.x) + COLLISION_QUERY_MARGIN;
+  const minY = Math.min(y0, bullet.y) - COLLISION_QUERY_MARGIN;
+  const maxY = Math.max(y0, bullet.y) + COLLISION_QUERY_MARGIN;
+  const minCx = Math.floor(minX / COLLISION_CELL_SIZE);
+  const maxCx = Math.floor(maxX / COLLISION_CELL_SIZE);
+  const minCy = Math.floor(minY / COLLISION_CELL_SIZE);
+  const maxCy = Math.floor(maxY / COLLISION_CELL_SIZE);
+  const result = [];
+  for(let cx=minCx; cx<=maxCx; cx++){
+    for(let cy=minCy; cy<=maxCy; cy++){
+      const bucket = grid.get(cellKeyOf(cx, cy));
+      if(bucket) result.push(...bucket);
+    }
+  }
+  return result;
+}
+const EMPTY_ARRAY = [];
+
 export function checkCollisions(){
+  // Grilles reconstruites une fois par frame (pas par balle) : coût O(n).
+  const enemyGrid = enemies.length ? buildSpatialGrid(enemies) : null;
+  const asteroidGrid = asteroids.length ? buildSpatialGrid(asteroids) : null;
+
   for(let i=bullets.length-1;i>=0;i--){
     const bullet = bullets[i];
-    const enemyResult = collideBulletWithEnemies(bullet);
-    const asteroidResult = !enemyResult.hit || bullet.pierce > 0
-      ? collideBulletWithAsteroids(bullet)
-      : { hit:false, bounced:false };
+    const nearbyEnemies = enemyGrid ? queryGridForBullet(enemyGrid, bullet) : EMPTY_ARRAY;
+    const enemyResult = nearbyEnemies.length ? collideBulletWithEnemies(bullet, nearbyEnemies) : { hit:false, bounced:false };
+    let asteroidResult = { hit:false, bounced:false };
+    if((!enemyResult.hit || bullet.pierce > 0) && asteroidGrid){
+      const nearbyAsteroids = queryGridForBullet(asteroidGrid, bullet);
+      if(nearbyAsteroids.length) asteroidResult = collideBulletWithAsteroids(bullet, nearbyAsteroids);
+    }
     const hit = enemyResult.hit || asteroidResult.hit;
     const bounced = enemyResult.bounced || asteroidResult.bounced;
     if(hit && bullet.pierce <= 0 && !bounced) bullets.splice(i, 1);
@@ -652,12 +1143,13 @@ export function checkCollisions(){
   collidePlayerWithEnemies();
 }
 
-function collideBulletWithEnemies(bullet){
+function collideBulletWithEnemies(bullet, candidates){
   let hit = false;
   let bounced = false;
-  for(let i=enemies.length-1;i>=0;i--){
-    const enemy = enemies[i];
+  for(const enemy of candidates){
     if(bullet.hitTargets.has(enemy) || !isBulletTouching(bullet, enemy) || wasRecentlyHit(bullet, enemy)) continue;
+    // l'ennemi a pu être retiré du jeu par un autre coup ce même tick
+    if(enemies.indexOf(enemy) === -1) continue;
     damageEnemy(enemy, bullet.dmg);
     bullet.hitTargets.add(enemy);
     if(bullet.crit) triggerChainLightning(enemy);
@@ -671,12 +1163,12 @@ function collideBulletWithEnemies(bullet){
   return { hit, bounced };
 }
 
-function collideBulletWithAsteroids(bullet){
+function collideBulletWithAsteroids(bullet, candidates){
   let hit = false;
   let bounced = false;
-  for(let i=asteroids.length-1;i>=0;i--){
-    const asteroid = asteroids[i];
+  for(const asteroid of candidates){
     if(bullet.hitTargets.has(asteroid) || !isBulletTouching(bullet, asteroid) || wasRecentlyHit(bullet, asteroid)) continue;
+    if(asteroids.indexOf(asteroid) === -1) continue;
     damageAsteroid(asteroid, bullet.dmg);
     bullet.hitTargets.add(asteroid);
     spawnBurst(bullet.x, bullet.y, color(177,151,139), 5);
@@ -721,6 +1213,7 @@ export function drawEntities(){
   drawParticles();
   drawAsteroids();
   drawEnemies();
+  if(hyperPortal) hyperPortal.draw();
   drawBullets();
   drawOrbitals();
   drawDrones();
@@ -729,7 +1222,7 @@ export function drawEntities(){
 }
 
 export function drawEnemyIndicators(){
-  if(!player || !run || run.waveSpawned < run.waveTotal || enemies.length > 3) return;
+  if(!player || !run || enemies.length === 0 || enemies.length > 3) return;
   const edgePadding = 24;
   const centerX = width / 2;
   const centerY = height / 2;
@@ -740,6 +1233,31 @@ export function drawEnemyIndicators(){
     if(isVisible) continue;
     drawEnemyIndicator(screenX, screenY, centerX, centerY, edgePadding, enemy.color);
   }
+}
+
+export function drawPortalIndicator(){
+  if(!player || !hyperPortal) return;
+  const screenX = hyperPortal.x - camX;
+  const screenY = hyperPortal.y - camY;
+  if(screenX >= 0 && screenX <= width && screenY >= 0 && screenY <= height) return;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const directionX = screenX - centerX;
+  const directionY = screenY - centerY;
+  const distance = Math.hypot(directionX, directionY) || 1;
+  const unitX = directionX / distance;
+  const unitY = directionY / distance;
+  const padding = 30;
+  const edgeDistance = Math.min(
+    (width / 2 - padding) / Math.max(Math.abs(unitX), 0.001),
+    (height / 2 - padding) / Math.max(Math.abs(unitY), 0.001),
+  );
+  const indicatorX = centerX + unitX * edgeDistance;
+  const indicatorY = centerY + unitY * edgeDistance;
+  push(); translate(indicatorX, indicatorY); rotate(Math.atan2(unitY, unitX));
+  noStroke(); fill(hyperPortal.color[0], hyperPortal.color[1], hyperPortal.color[2], 230);
+  triangle(14, 0, -9, 8, -9, -8);
+  pop();
 }
 
 function drawEnemyIndicator(targetX, targetY, centerX, centerY, padding, enemyColor){
@@ -785,14 +1303,26 @@ export function updateHUD(){
   const hp = document.getElementById('hp-val'); if(hp) hp.innerText = `${Math.ceil(Math.max(0, player.hp))} / ${player.maxHp}`;
   const xpFill = document.getElementById('xp-fill'); if(xpFill) xpFill.style.width = (player.xp/player.xpNeeded*100)+'%';
   const lvl = document.getElementById('lvl-val'); if(lvl) lvl.innerText = player.level;
-  const wave = document.getElementById('wave-val'); if(wave) wave.innerText = run.wave;
+  const wave = document.getElementById('wave-val'); if(wave) wave.innerText = Math.max(1, Math.floor(difficultyScale()));
   const scrapRun = document.getElementById('scrap-run-val'); if(scrapRun) scrapRun.innerText = run.scrapEarned;
   const score = document.getElementById('score-val'); if(score) score.innerText = run.score;
-  const mode = document.getElementById('mode-val'); if(mode) mode.innerText = player.mode === 'folded' ? 'REPLIÉ' : 'COMBAT';
+  const biome = document.getElementById('biome-val'); if(biome) biome.innerText = BIOMES[run.biome % BIOMES.length].name;
+  const portal = document.getElementById('portal-val');
+  if(portal){
+    const portalStatus = {
+      found: 'ACTIVER',
+      active: `${Math.ceil(run.portalTimer / 60)}s`,
+      cleanup: 'NETTOYAGE',
+      ready: 'OUVERT',
+    }[run.portalEvent];
+    portal.innerText = portalStatus || `À ${run.nextPortalScore}`;
+  }
+  const mode = document.getElementById('dash-val'); if(mode) mode.innerText = player.dashCooldownTimer <= 0 ? 'PRÊT' : '...';
   const boost = document.getElementById('boost-fill'); if(boost) boost.style.width = (player.boost/player.boostMax*100)+'%';
-  const remaining = Math.max(0, run.waveTotal - run.waveSpawned + enemies.length);
-  const enemyCount = document.getElementById('enemy-count'); if(enemyCount) enemyCount.innerText = remaining;
-  const enemyFill = document.getElementById('enemy-fill'); if(enemyFill) enemyFill.style.width = (run.waveTotal ? remaining/run.waveTotal*100 : 0) + '%';
+  const dashFill = document.getElementById('dash-fill'); if(dashFill) dashFill.style.width = (100 - Math.min(100, player.dashCooldownTimer/DASH_COOLDOWN_FRAMES*100)) + '%';
+  const maxEnemies = getMaxEnemies();
+  const enemyCount = document.getElementById('enemy-count'); if(enemyCount) enemyCount.innerText = enemies.length;
+  const enemyFill = document.getElementById('enemy-fill'); if(enemyFill) enemyFill.style.width = (maxEnemies ? Math.min(100, enemies.length/maxEnemies*100) : 0) + '%';
 }
 
 export function drawCrosshair(){

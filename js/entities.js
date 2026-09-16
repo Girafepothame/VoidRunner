@@ -1,4 +1,5 @@
-import { MOD_DEFS, SHIP_PROFILES, meta } from './meta.js';
+import { SLOT_DEFS, SHIP_PROFILES } from './meta.js';
+import { EQUIPMENT_CATEGORIES, rarityById } from './equipment.js';
 
 // Classes for game entities: Player, Bullet, Enemy, Particle, Orb, ScrapPickup
 export class Player {
@@ -7,11 +8,13 @@ export class Player {
     const profile = SHIP_PROFILES[profileId] || SHIP_PROFILES.standard;
     this.profileId = SHIP_PROFILES[profileId] ? profileId : 'standard';
     this.profile = profile;
-    this.speed = profile.speed; this.hp = 100; this.maxHp = 100;
+    this.baseSpeed = profile.speed; this.speed = profile.speed;
+    this.vx = 0; this.vy = 0;
+    this.baseMaxHp = 100; this.hp = 100; this.maxHp = 100;
     this.fireCooldown = 0; this.fireRate = profile.fireRate;
     this.dmg = profile.dmg; this.dmgPerLevel = 0; this.lastDamageGain = 0; this.bulletSpeed = 50; this.bulletLength = 24; this.bulletSize = 3;
     this.maxAmmo = profile.magazine; this.ammo = this.maxAmmo; this.reloadTimer = 0; this.reloadDuration = 72; this.triggerHeld = false;
-    this.multishot = profile.multishot; this.pierce = 0; this.critChance = 0.05; this.regen = 0;
+    this.multishot = profile.multishot; this.pierce = 0; this.critChance = 0.05; this.regen = 0; this.boostRegenBonus = 0;
     this.magnet = 60; this.explosive = false;
     this.explosionRadius = 42; this.explosionDamage = 0.2;
     this.ricochet = 0; this.chainLightning = 0; this.laserLevel = 0;
@@ -19,25 +22,55 @@ export class Player {
     this.dashDamage = 0; this.lowHpDamage = 0; this.revive = 0;
     this.lives = 0; this.invuln = 0; this.level = 1; this.xp = 0; this.xpNeeded = 6;
     this.thrust = 0; this.upgradeCounts = {};
-    this.turretRight = 0; this.turretLeft = 0;
-    this.mode = 'folded';
     this.boost = 100; this.boostMax = 100;
-    this.dashCooldown = 0;
+    this.dashCooldownTimer = 0;
     this.dashTimer = 0;
-    this.dashDuration = 18;
+    this.dashDuration = 10;
     this.dashDistance = 0;
     this.dashAngle = 0;
     this.dashProgress = 0;
     this.dashAppliedDistance = 0;
-    this.dashHitTimer = 0;
-    // apply persistent meta upgrades
-    MOD_DEFS.forEach(d => {
-      const level = meta.mods[d.id];
-      this.upgradeCounts[d.id] = level;
-      for(let i=0;i<level; i++) d.apply(this);
-    });
+    // Équipement : slots fixes par catégorie (taille = max débloquable dans
+    // la meta-progression, voir SLOT_DEFS), + un petit inventaire de
+    // stockage pour les objets trouvés en run mais pas encore équipés. Ni
+    // les slots remplis ni l'inventaire ne persistent entre les runs — seul
+    // le NOMBRE de slots débloqués (meta.unlockedSlots) est permanent.
+    this.loadout = {
+      drone: new Array(SLOT_DEFS.drone.max).fill(null),
+      reactor: new Array(SLOT_DEFS.reactor.max).fill(null),
+      hull: new Array(SLOT_DEFS.hull.max).fill(null),
+    };
+    this.inventory = new Array(5).fill(null);
   }
 }
+
+export class HyperPortal {
+  constructor(x, y, colorValue){
+    this.x = x; this.y = y; this.radius = 46; this.color = colorValue; this.phase = 0;
+  }
+  update(){ this.phase += 0.06; }
+  draw(){
+    const pulse = 1 + Math.sin(this.phase) * 0.08;
+    noFill();
+    for(const [scale, alpha, weight] of [[1.65, 25, 2], [1.35, 60, 3], [1, 230, 3]]){
+      stroke(this.color[0], this.color[1], this.color[2], alpha); strokeWeight(weight);
+      circle(this.x, this.y, this.radius * scale * pulse);
+    }
+    stroke(255, 255, 255, 170); strokeWeight(1);
+    circle(this.x, this.y, this.radius * 0.68);
+    for(let i=0;i<4;i++){
+      const angle = this.phase * 0.7 + i * HALF_PI;
+      line(this.x + Math.cos(angle) * 24, this.y + Math.sin(angle) * 24,
+        this.x + Math.cos(angle) * 39, this.y + Math.sin(angle) * 39);
+    }
+  }
+}
+
+// Couleurs des balles mises en cache au premier draw() (on ne peut pas
+// appeler color() avant que p5 soit initialisé, donc init paresseuse).
+// Évite de recréer un objet p5.Color à chaque frame pour chaque balle.
+let _bulletCritColor = null;
+let _bulletNormalColor = null;
 
 export class Bullet {
   constructor(x,y,vx,vy,dmg,crit=false,pierce=0,size=5,explosive=false,length=0){
@@ -53,10 +86,10 @@ export class Bullet {
     return this.x < -20 || this.x > width+20 || this.y < -20 || this.y > height+20;
   }
   draw(){
-    fill(this.crit ? color(255,220,120) : color(255,255,255));
+    if(!_bulletCritColor){ _bulletCritColor = color(255,220,120); _bulletNormalColor = color(255,255,255); }
     const angle = Math.atan2(this.vy, this.vx);
     push(); translate(this.x, this.y); rotate(angle);
-    fill(this.crit ? color(255,220,120) : color(255,255,255));
+    fill(this.crit ? _bulletCritColor : _bulletNormalColor);
     if(this.length > 0) rect(0, 0, this.length, this.size, this.size / 2);
     else circle(0, 0, this.size);
     pop();
@@ -96,11 +129,36 @@ export class Orbital {
 }
 
 export class Enemy {
-  constructor(params){ Object.assign(this, params); }
+  constructor(params){
+    Object.assign(this, params);
+    this.aggroRange = params.aggroRange ?? (this.isPortalBoss || this.isMiniboss ? Infinity : 320);
+    this.wanderAngle = params.wanderAngle ?? random(TWO_PI);
+    this.wanderTimer = params.wanderTimer ?? random(45, 140);
+    this.wanderTurn = params.wanderTurn ?? random(-0.025, 0.025);
+  }
   // now accepts enemyBullets array reference as third arg to avoid global dependency
   update(player, run, enemyBulletsRef){
     const dx = player.x-this.x, dy = player.y-this.y;
     const d = Math.hypot(dx,dy) || 1;
+    const sniperLocked = this.type === 'sniper' && (this.state === 'aiming' || this.state === 'firing' || this.state === 'laserGap');
+    const aggro = d <= this.aggroRange || sniperLocked;
+    if(!aggro){
+      if(this.type === 'sniper' && this.state === 'cooldown'){
+        this.fireCooldown--;
+        if(this.fireCooldown <= 0) this.state = 'seeking';
+      }
+      this.wanderTimer--;
+      this.wanderAngle += this.wanderTurn;
+      if(this.wanderTimer <= 0){
+        this.wanderTimer = random(45, 140);
+        this.wanderTurn = random(-0.025, 0.025);
+        this.wanderAngle += random(-0.7, 0.7);
+      }
+      this.angle = this.wanderAngle;
+      this.x += Math.cos(this.wanderAngle) * this.speed * 0.65;
+      this.y += Math.sin(this.wanderAngle) * this.speed * 0.65;
+      return;
+    }
     this.angle = atan2(dy,dx);
     if(this.type==='chaser'){
       this.x += (dx/d)*this.speed; this.y += (dy/d)*this.speed;
@@ -117,14 +175,61 @@ export class Enemy {
       this.fireCooldown--;
       const inShootingRange = d >= minShootDistance && d <= maxShootDistance;
       if(this.fireCooldown<=0 && inShootingRange){
-        this.fireCooldown = Math.max(40, 100 - run.wave*4);
+        this.fireCooldown = Math.max(40, 100 - Math.floor((run?.biome || 0) * 4));
         if(Array.isArray(enemyBulletsRef)){
           enemyBulletsRef.push(new Bullet(this.x,this.y,(dx/d)*5,(dy/d)*5,this.dmg*0.6,false,5));
         }
       }
+    } else if(this.type==='sniper'){
+      // Garde ses distances, télégraphie une grosse attaque (ligne rouge qui
+      // suit le joueur) puis tire un projectile rapide et puissant une fois
+      // le viseur verrouillé — force à changer brutalement de direction.
+      const idealDist = 380;
+      if(this.state !== 'aiming' && this.state !== 'firing'){
+        if(d > idealDist+40){ this.x += (dx/d)*this.speed; this.y += (dy/d)*this.speed; }
+        else if(d < idealDist-40){ this.x -= (dx/d)*this.speed; this.y -= (dy/d)*this.speed; }
+      }
+      if(!this.state) this.state = 'seeking';
+      if(this.state === 'seeking'){
+        this.fireCooldown--;
+        if(this.fireCooldown <= 0){ this.state = 'aiming'; this.aimTimer = 70; }
+      } else if(this.state === 'aiming'){
+        this.angle = Math.atan2(dy,dx);
+        this.aimTimer--;
+        if(this.aimTimer <= 0){
+          this.state = 'firing'; this.fireTimer = 10;
+        }
+      } else if(this.state === 'firing'){
+        this.angle = Math.atan2(dy,dx);
+        this.fireTimer--;
+        if(this.fireTimer <= 0){
+          this.state = 'laserGap'; this.fireTimer = 2;
+        }
+      } else if(this.state === 'laserGap'){
+        this.fireTimer--;
+        if(this.fireTimer > 0) return;
+        this.angle = Math.atan2(dy,dx);
+        this.state = 'cooldown'; this.fireCooldown = 150;
+        this.laserAngle = this.angle;
+        this.laserTimer = 5;
+        if(typeof enemyBulletsRef === 'function') enemyBulletsRef(this);
+      } else if(this.state === 'cooldown'){
+        this.fireCooldown--;
+        if(this.fireCooldown <= 0) this.state = 'seeking';
+      }
+      if(this.laserTimer > 0) this.laserTimer--;
     }
   }
   draw(){
+    if(this.type==='sniper' && (this.state==='aiming' || this.state==='firing' || this.laserTimer > 0)){
+      const alpha = this.state === 'aiming'
+        ? map(this.aimTimer, 70, 0, 40, 255)
+        : 255;
+      const laserAngle = this.laserTimer > 0 ? this.laserAngle : this.angle;
+      const laserLength = Math.max(width, height) * 3;
+      stroke(255,80,80,alpha); strokeWeight(this.laserTimer > 0 ? 3 : 1.5);
+      line(this.x, this.y, this.x+Math.cos(laserAngle)*laserLength, this.y+Math.sin(laserAngle)*laserLength);
+    }
     push(); translate(this.x,this.y); rotate(this.angle);
     stroke(this.color[0],this.color[1],this.color[2]); strokeWeight(2);
     fill(this.color[0],this.color[1],this.color[2], 40);
@@ -173,9 +278,17 @@ export class Asteroid {
   }
 }
 
+// Particle est maintenant poolable : reset() réinitialise une instance
+// existante au lieu d'en créer une nouvelle (voir spawnBurst dans
+// gameplay.js). Le flag `active` indique si la particule doit être mise à
+// jour / dessinée, sans jamais faire d'allocation en jeu.
 export class Particle {
-  constructor(x,y,vx,vy,life,col){
+  constructor(x=0,y=0,vx=0,vy=0,life=0,col=null){
+    this.reset(x,y,vx,vy,life,col);
+  }
+  reset(x,y,vx,vy,life,col){
     this.x=x; this.y=y; this.vx=vx; this.vy=vy; this.life=life; this.col=col;
+    this.active = true;
   }
   update(){
     this.x += this.vx; this.y += this.vy;
@@ -234,11 +347,39 @@ export class ScrapPickup {
   }
 }
 
+// Pickup d'équipement : dropé uniquement par les mini-boss. Homing comme
+// les autres pickups, coloré selon la rareté de l'objet transporté
+// (this.item, généré par equipment.js::rollEquipment).
+export class EquipmentPickup {
+  constructor(x,y,item){ this.x=x; this.y=y; this.item=item; this.vx=0; this.vy=0; this.homing=false; this.homingSpeed=0.6; }
+  update(player){
+    const dx = player.x - this.x; const dy = player.y - this.y; const d = Math.hypot(dx,dy) || 1;
+    if(d < player.magnet) this.homing = true;
+    if(this.homing){ this.homingSpeed = Math.min(11, this.homingSpeed * 1.08 + 0.18); const a = Math.atan2(dy,dx); this.vx = Math.cos(a) * this.homingSpeed; this.vy = Math.sin(a) * this.homingSpeed; }
+    this.x += this.vx; this.y += this.vy; this.vx *= 0.98; this.vy *= 0.98;
+  }
+  draw(){
+    const rarity = rarityById(this.item.rarityId);
+    const c = color(rarity.color);
+    push(); translate(this.x, this.y); rotate(frameCount*0.04);
+    noFill(); stroke(red(c), green(c), blue(c), 230); strokeWeight(2);
+    rectMode(CENTER); rect(0, 0, 12, 12, 2);
+    noStroke(); fill(red(c), green(c), blue(c), 220);
+    circle(0, 0, 5);
+    pop();
+  }
+}
+
 export class Turret {
   constructor(side){
     this.side = side;
     this.x = 0; this.y = 0; this.angle = 0;
     this.fireCooldown = 0;
+    // Renseignés depuis l'objet d'équipement "drone" qui occupe ce slot
+    // (voir makeTurretFromEquipment dans gameplay.js) ; valeurs par défaut
+    // si jamais créée sans équipement (ne devrait pas arriver en jeu).
+    this.dmgMult = 0.55;
+    this.fireRate = 42;
   }
   update(player, targetX, targetY, bullets){
     const sideOffset = this.side * 14;
@@ -248,8 +389,8 @@ export class Turret {
     this.angle = Math.atan2(targetY - this.y, targetX - this.x);
     if(this.fireCooldown > 0) this.fireCooldown--;
     if(this.fireCooldown > 0) return;
-    bullets.push(new Bullet(this.x, this.y, Math.cos(this.angle) * 14, Math.sin(this.angle) * 14, player.dmg * 0.55, false, 0, 4, player.explosive));
-    this.fireCooldown = 42;
+    bullets.push(new Bullet(this.x, this.y, Math.cos(this.angle) * 14, Math.sin(this.angle) * 14, player.dmg * this.dmgMult, false, 0, 4, player.explosive));
+    this.fireCooldown = this.fireRate;
   }
   draw(){
     push(); translate(this.x, this.y); rotate(this.angle);
@@ -258,5 +399,3 @@ export class Turret {
     pop();
   }
 }
-
-
