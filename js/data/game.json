@@ -5,12 +5,23 @@
       "tagline": "Profil équilibré",
       "details": "Vitesse et cadence standard",
       "speed": 5,
-      "fireRate": 16,
-      "dmg": 10,
+      "fireRate": 20,
+      "dmg": 1,
       "multishot": 1,
-      "magazine": 3,
       "color": [255, 255, 255],
       "shape": [[24, 0], [0, 11], [-11, 0], [0, -11]]
+    }
+  },
+  "playerArmor": {
+    "rotationDegrees": 90,
+    "core": { "x": 0, "y": 0, "radius": 4 },
+    "plateHp": 3,
+    "respawnFrames": 180,
+    "parts": {
+      "body": [[4.5,-58.5],[13.5,-4.5],[4.5,4.5],[-4.5,4.5],[-13.5,-4.5],[-4.5,-58.5]],
+      "right-wing": [[13.5,-4.5],[22.5,13.5],[13.5,22.5],[9,22.5],[4.5,13.5],[4.5,4.5]],
+      "left-wing": [[-13.5,-4.5],[-22.5,13.5],[-13.5,22.5],[-9,22.5],[-4.5,13.5],[-4.5,4.5]],
+      "reactor": [[4.5,13.5],[9,22.5],[4.5,31.5],[-4.5,31.5],[-9,22.5],[-4.5,13.5]]
     }
   },
   "slots": {
@@ -37,9 +48,7 @@
     "maxHp": 10,
     "dmg": 1,
     "fireRate": 1,
-    "minFireRate": 4,
-    "magazine": 1,
-    "magazineEvery": 5
+    "minFireRate": 4
   },
   "biomes": [
     { "name": "NÉBULEUSE", "color": [57, 255, 176] },
@@ -52,6 +61,10 @@
     "nextBiomeScore": 350,
     "eventDurationMaxSeconds": 120,
     "eventDurationMinSeconds": 90
+  },
+  "enemyShapes": {
+    "right": [[4,-44],[12,-52],[20,-12],[28,-4],[20,4],[12,4],[4,12],[4,-4],[8,-12],[4,-20]],
+    "left": [[-4,-44],[-12,-52],[-20,-12],[-28,-4],[-20,4],[-12,4],[-4,12],[-4,-4],[-8,-12],[-4,-20]]
   },
   "danger": {
     "distancePerChunk": 0.35,

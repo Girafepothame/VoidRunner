@@ -214,13 +214,7 @@ canvas {
 /* ============ PANNEAUX (plaques forgées) ============ */
 .panel {
   position: relative;
-  background:
-    repeating-linear-gradient(
-      135deg,
-      rgba(255, 255, 255, 0.015) 0 2px,
-      transparent 2px 6px
-    ),
-    var(--color-bg-panel);
+  background: var(--color-bg-panel);
   border: 1px solid var(--color-border);
   border-radius: 3px;
   padding: 22px 26px;
@@ -399,11 +393,6 @@ canvas {
       rgba(57, 255, 176, 0.08),
       transparent 55%
     ),
-    repeating-linear-gradient(
-      135deg,
-      rgba(255, 255, 255, 0.015) 0 2px,
-      transparent 2px 6px
-    ),
     var(--color-bg-panel);
   border: 1px solid var(--color-border);
   border-radius: 14px;
@@ -498,17 +487,11 @@ canvas {
 }
 
 @media (max-width: 780px) {
-  #run-counters {
+  #run-line {
     top: 10px;
     right: 10px;
-    gap: 6px;
-  }
-  .run-counter {
-    min-width: 72px;
-    padding: 6px 8px;
-  }
-  .run-counter b {
-    font-size: 15px;
+    gap: 8px;
+    font-size: 9px;
   }
   .levelup-content {
     flex-direction: column;
@@ -649,63 +632,45 @@ canvas {
   font-size: 12px;
   letter-spacing: 1px;
 }
-#run-counters {
+#run-line {
   position: absolute;
   top: 14px;
   right: 18px;
   display: flex;
-  gap: 10px;
-  align-items: stretch;
-}
-.run-counter {
-  min-width: 92px;
-  padding: 7px 12px 8px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  background: rgba(9, 13, 24, 0.86);
-  border: 1px solid var(--color-border);
-  border-radius: 3px;
-  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.35);
-}
-.counter-label {
+  gap: 14px;
   color: var(--color-text-dim);
   font-family: var(--font-heading);
-  font-size: 9px;
-  letter-spacing: 2px;
-}
-.run-counter b {
-  font-size: 18px;
-  line-height: 1.1;
+  font-size: 10px;
   letter-spacing: 1px;
+  white-space: nowrap;
 }
-.score-counter {
-  border-color: var(--color-primary-dim);
+#run-line b {
+  margin-left: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
-.score-counter b {
+#run-line > span:nth-child(1) b {
   color: var(--color-primary);
   text-shadow: 0 0 8px rgba(57, 255, 176, 0.45);
 }
-.scrap-counter {
-  border-color: var(--color-accent);
-}
-.scrap-counter b {
+#run-line > span:nth-child(2) b {
   color: var(--color-accent);
   text-shadow: 0 0 8px rgba(255, 184, 79, 0.45);
 }
-.biome-counter {
-  border-color: var(--color-secondary-dim);
-}
-.biome-counter b {
+#run-line > span:nth-child(3) b {
   color: var(--color-secondary);
   text-shadow: 0 0 8px rgba(180, 107, 255, 0.45);
 }
-.portal-counter {
-  border-color: var(--color-primary-dim);
+#portal-status {
+  opacity: 0.45;
 }
-.portal-counter b {
+#portal-status.actionable {
+  opacity: 1;
   color: var(--color-primary);
-  font-size: 13px;
+  text-shadow: 0 0 8px rgba(57, 255, 176, 0.55);
+}
+#portal-status b {
+  color: var(--color-primary);
 }
 #wave-progress {
   position: absolute;
@@ -722,14 +687,18 @@ canvas {
   letter-spacing: 2px;
   font-family: var(--font-heading);
 }
-.wave-progress-label span {
-  color: var(--color-danger);
+#enemy-count {
+  margin-top: 4px;
+  color: var(--color-text-dim);
+  font-size: 9px;
+  letter-spacing: 1px;
 }
 .wave-progress-bg {
-  height: 7px;
+  height: 3px;
   margin-top: 5px;
   background: #0a0f1a;
-  border: 1px solid var(--color-border);
+  border: 0;
+  opacity: 0.5;
   overflow: hidden;
   box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.6);
 }
@@ -738,6 +707,66 @@ canvas {
   width: 100%;
   background: linear-gradient(90deg, var(--color-danger), var(--color-accent));
   box-shadow: 0 0 8px rgba(255, 61, 94, 0.6);
+  transition: width 0.15s linear;
+}
+
+#damage-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle, transparent 42%, rgba(255, 61, 94, 0.78) 100%);
+  opacity: 0;
+  transition: opacity 0.12s linear;
+  z-index: 0;
+}
+#hp-critical {
+  position: absolute;
+  left: 50%;
+  bottom: 44px;
+  transform: translateX(-50%);
+  display: none;
+  color: var(--color-danger);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-shadow: 0 0 8px rgba(255, 61, 94, 0.75);
+  white-space: nowrap;
+}
+#dash-glyph,
+#boost-glyph {
+  position: absolute;
+  width: 26px;
+  height: 30px;
+  pointer-events: none;
+  opacity: 0.35;
+  z-index: 2;
+  transition: opacity 0.12s ease, filter 0.12s ease;
+}
+#dash-glyph svg,
+#boost-glyph svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke-width: 1.5;
+}
+#dash-glyph svg { stroke: var(--color-secondary); }
+#boost-glyph svg { stroke: var(--color-accent); }
+#dash-glyph.ready { filter: drop-shadow(0 0 6px var(--color-secondary)); }
+#boost-glyph.ready { filter: drop-shadow(0 0 6px var(--color-accent)); }
+#xp-sliver {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(57, 255, 176, 0.12);
+  z-index: 2;
+}
+#xp-sliver > div {
+  width: 0%;
+  height: 100%;
+  background: var(--color-primary);
+  box-shadow: 0 0 8px rgba(57, 255, 176, 0.65);
   transition: width 0.15s linear;
 }
 
@@ -763,38 +792,6 @@ canvas {
 }
 .bar-fill {
   height: 100%;
-}
-#hp-fill {
-  background: linear-gradient(90deg, var(--color-danger), #ff8fa8);
-  box-shadow: 0 0 8px rgba(255, 61, 94, 0.5);
-  width: 100%;
-}
-#xp-fill {
-  background: linear-gradient(90deg, var(--color-primary), #9fffd9);
-  box-shadow: 0 0 8px rgba(57, 255, 176, 0.5);
-  width: 0%;
-}
-#boost-fill {
-  background: linear-gradient(90deg, var(--color-accent), #ffe09b);
-  box-shadow: 0 0 8px rgba(255, 184, 79, 0.5);
-  width: 100%;
-  transition: width 0.08s linear;
-}
-#dash-fill {
-  background: linear-gradient(90deg, var(--color-secondary), #d9b3ff);
-  box-shadow: 0 0 8px rgba(180, 107, 255, 0.5);
-  width: 100%;
-  transition: width 0.05s linear;
-}
-.boost-bar {
-  margin-top: 4px;
-}
-.boost-caption {
-  color: var(--color-accent);
-  font-size: 9px;
-  letter-spacing: 1px;
-  margin-top: 3px;
-  font-family: var(--font-heading);
 }
 .resource-label {
   margin-top: 8px;
@@ -836,10 +833,7 @@ canvas {
   text-align: center;
 }
 
-/* ============ INVENTAIRE (overlay semi-transparent, touche I) ========== */
-/* Ce n'est volontairement PAS un vrai écran de pause : le jeu continue de
-   tourner derrière (au ralenti, voir main.js), donc l'overlay reste
-   semi-transparent et laisse voir l'action en arrière-plan. */
+/* ============ INVENTAIRE (overlay en pause, touche I) ========== */
 .inventory-overlay {
   position: absolute;
   inset: 0;
@@ -921,4 +915,44 @@ canvas {
   height: 8px;
   border-radius: 50%;
   box-shadow: 0 0 6px currentColor;
+}
+.inventory-tooltip {
+  position: fixed;
+  z-index: 20;
+  width: min(240px, calc(100vw - 28px));
+  padding: 12px 14px;
+  background: rgba(8, 13, 24, 0.98);
+  border: 1px solid var(--tooltip-accent, var(--color-primary-dim));
+  border-left: 3px solid var(--tooltip-accent, var(--color-primary-dim));
+  box-shadow: 0 0 18px rgba(0, 0, 0, 0.45), 0 0 14px color-mix(in srgb, var(--tooltip-accent, var(--color-primary-dim)) 20%, transparent);
+  pointer-events: none;
+}
+.inventory-tooltip.hidden { display: none; }
+.tooltip-kicker {
+  color: var(--color-text-dim);
+  font-family: var(--font-heading);
+  font-size: 9px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.tooltip-name {
+  margin-top: 3px;
+  color: var(--tooltip-accent, var(--color-primary));
+  font-family: var(--font-heading);
+  font-size: 14px;
+  letter-spacing: 1px;
+}
+.tooltip-stats {
+  margin-top: 9px;
+  color: var(--color-text);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.tooltip-action {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-primary);
+  font-size: 10px;
+  letter-spacing: 0.5px;
 }

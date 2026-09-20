@@ -3,7 +3,8 @@
 // son contenu (astéroïdes, caches de scrap) de façon déterministe à partir de
 // ses coordonnées + une seed globale. Les chunks proches du joueur sont
 // chargés, les autres sont déchargés (et leurs entités retirées du jeu).
-import { Asteroid, ScrapPickup } from './entities.js';
+import { Asteroid } from './model/entities/world.js';
+import { ScrapPickup } from './model/entities/pickups.js';
 
 export const CHUNK_SIZE = 2000;   // taille d'un chunk, en unités monde
 const LOAD_RADIUS = 2;            // rayon (en chunks) chargé autour du joueur

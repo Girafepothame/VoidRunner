@@ -35,6 +35,13 @@ function drawStarfield(){
 	}
 }
 
+function positionHudGlyphs(){
+	const dash = document.getElementById('dash-glyph');
+	const boost = document.getElementById('boost-glyph');
+	if(dash) { dash.style.left = `${mouseX - 43}px`; dash.style.top = `${mouseY - 15}px`; }
+	if(boost) { boost.style.left = `${mouseX + 17}px`; boost.style.top = `${mouseY - 15}px`; }
+}
+
 function _setup(){
 	// Évite de dessiner à 2x/3x de pixels sur écrans HiDPI (Retina, etc.) :
 	// p5 utilise window.devicePixelRatio par défaut, ce qui peut quadrupler
@@ -44,24 +51,17 @@ function _setup(){
 	const c = createCanvas(windowWidth, windowHeight); c.parent('game-container'); c.style('position','absolute'); c.style('top','0'); c.style('left','0'); c.style('z-index','0'); textFont('Consolas, Menlo, monospace'); createStarfield(); renderMenuScrap();
 }
 function _windowResized(){ resizeCanvas(windowWidth, windowHeight); }
-// Nombre de frames "sautées" pour la logique de jeu quand l'inventaire est
-// ouvert : le jeu continue de tourner (ce n'est pas une vraie pause) mais
-// au ralenti, pour laisser réorganiser son équipement sous une pression
-// réduite plutôt que nulle. Le rendu, lui, reste appelé chaque frame.
-const INVENTORY_SLOWDOWN = 6;
-
 function _draw(){ background(6,9,18); drawStarfield();
 	// translate world camera
 	push(); translate(-gameplay.camX, -gameplay.camY);
 	if(gameplay.gameState === 'playing'){
-		const shouldUpdate = !gameplay.inventoryOpen || (frameCount % INVENTORY_SLOWDOWN === 0);
-		if(shouldUpdate) gameplay.updateRun();
+		gameplay.updateRun();
 		gameplay.drawEntities();
 	}
 	else if(gameplay.gameState !== 'menu'){ gameplay.drawEntities(); }
 	pop();
 	if(gameplay.gameState === 'playing'){ gameplay.drawEnemyIndicators(); gameplay.drawPortalIndicator(); }
-	if(gameplay.gameState === 'playing' && !gameplay.inventoryOpen){ gameplay.drawCrosshair(); noCursor(); }
+	if(gameplay.gameState === 'playing' && !gameplay.inventoryOpen){ gameplay.drawCrosshair(); positionHudGlyphs(); noCursor(); }
 	else { cursor(); }
 	// HUD and overlays
 	if(gameplay.gameState === 'playing'){ gameplay.updateHUD(); }
@@ -88,13 +88,7 @@ function _keyPressed(){
 		return false;
 	}
 	const lower = key.toLowerCase();
-	// Double-tap Z/S/Q/D -> dash (voir registerDirectionTap). On ne compte
-	// une "frappe" que sur une vraie transition relâché->appuyé : sans ce
-	// garde-fou, l'auto-répétition du clavier pendant qu'on maintient la
-	// touche déclencherait des dashs en continu.
-	if(['z','s','q','d'].includes(lower) && !gameplay.keys[lower]){
-		gameplay.registerDirectionTap(lower);
-	}
+	if(key === ' ' || key === 'Spacebar' || keyCode === 32){ gameplay.requestPlayerDash(); return false; }
 	if(typeof gameplay.keys !== 'undefined') gameplay.keys[lower] = true;
 	return false;
 }

@@ -78,8 +78,39 @@ export function flashWaveBanner(txt){ const b = document.getElementById('wave-ba
 export function buildInventoryUI(){
 	const player = gameplay.player;
 	if(!player) return;
+	hideInventoryTooltip();
 	Object.keys(SLOT_DEFS).forEach(category => renderLoadoutRow(category, player));
 	renderInventoryStorage(player);
+}
+
+function showInventoryTooltip(slot, item, action){
+	const tooltip = document.getElementById('inventory-tooltip');
+	if(!tooltip || !item) return;
+	const def = EQUIPMENT_CATEGORIES[item.category];
+	const rarity = rarityById(item.rarityId);
+	tooltip.innerHTML = `<div class="tooltip-kicker">${def.label}</div><div class="tooltip-name">${rarity.name}</div><div class="tooltip-stats">${def.describe(item.stats)}</div><div class="tooltip-action">${action}</div>`;
+	tooltip.style.setProperty('--tooltip-accent', rarity.color);
+	tooltip.classList.remove('hidden');
+	const slotRect = slot.getBoundingClientRect();
+	const tooltipRect = tooltip.getBoundingClientRect();
+	const margin = 10;
+	const left = Math.min(Math.max(margin, slotRect.left + slotRect.width / 2 - tooltipRect.width / 2), window.innerWidth - tooltipRect.width - margin);
+	const above = slotRect.top - tooltipRect.height - margin;
+	const top = above >= margin ? above : Math.min(window.innerHeight - tooltipRect.height - margin, slotRect.bottom + margin);
+	tooltip.style.left = `${left}px`;
+	tooltip.style.top = `${Math.max(margin, top)}px`;
+}
+
+function hideInventoryTooltip(){
+	const tooltip = document.getElementById('inventory-tooltip');
+	if(tooltip) tooltip.classList.add('hidden');
+}
+
+function bindInventoryTooltip(slot, item, action){
+	slot.addEventListener('mouseenter', () => showInventoryTooltip(slot, item, action));
+	slot.addEventListener('mouseleave', hideInventoryTooltip);
+	slot.addEventListener('focus', () => showInventoryTooltip(slot, item, action));
+	slot.addEventListener('blur', hideInventoryTooltip);
 }
 
 function renderLoadoutRow(category, player){
@@ -98,7 +129,8 @@ function renderLoadoutRow(category, player){
 		} else if(item){
 			const rarity = rarityById(item.rarityId);
 			slot.innerHTML = `<span class="icon" style="color:${rarity.color}">${def.icon}</span><span class="rarity-dot" style="background:${rarity.color}"></span>`;
-			slot.title = `${rarity.name} — ${def.describe(item.stats)} (clic pour retirer)`;
+			slot.setAttribute('aria-label', `${rarity.name} ${def.label}`);
+			bindInventoryTooltip(slot, item, 'Cliquer pour retirer');
 			slot.onclick = () => { gameplay.unequipItem(category, index); buildInventoryUI(); };
 		} else {
 			slot.innerHTML = `<span class="icon" style="opacity:0.25">${def.icon}</span>`;
@@ -119,7 +151,8 @@ function renderInventoryStorage(player){
 			const def = EQUIPMENT_CATEGORIES[item.category];
 			const rarity = rarityById(item.rarityId);
 			slot.innerHTML = `<span class="icon" style="color:${rarity.color}">${def.icon}</span><span class="rarity-dot" style="background:${rarity.color}"></span>`;
-			slot.title = `${rarity.name} ${def.label} — ${def.describe(item.stats)} (clic pour équiper)`;
+			slot.setAttribute('aria-label', `${rarity.name} ${def.label}`);
+			bindInventoryTooltip(slot, item, 'Cliquer pour équiper');
 			slot.onclick = () => { gameplay.equipFromInventory(index); buildInventoryUI(); };
 		} else {
 			slot.title = 'Emplacement de stockage vide';

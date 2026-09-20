@@ -1,4 +1,10 @@
-import { Player, Bullet, Enemy, Asteroid, Particle, Shockwave, Orb, ScrapPickup, EquipmentPickup, Turret, Drone, Orbital, HyperPortal } from './entities.js';
+import { Player } from './model/entities/player.js';
+import { Bullet } from './model/entities/projectile.js';
+import { Enemy } from './model/entities/combat.js';
+import { Asteroid } from './model/entities/world.js';
+import { Orb, ScrapPickup, EquipmentPickup } from './model/entities/pickups.js';
+import { Turret, Drone, Orbital } from './model/entities/support.js';
+import { Particle, Shockwave, HyperPortal } from './model/entities/effects.js';
 import { EXPLOSION_SUB_DEFS, LEVEL_STAT_GROWTH, LEVEL_UP_DEFS, SLOT_DEFS, meta } from './meta.js';
 import { rollEquipment, recomputeEquipmentStats } from './equipment.js';
 import { showScreen, flashWaveBanner, buildInventoryUI } from './ui.js';
@@ -20,6 +26,7 @@ export let hyperPortal = null;
 export let keys = {};
 export let waveBannerTimer = 0;
 export let currentCards = [];
+const PLAYER_SCALE = 0.65;
 // Overlay d'inventaire (touche I) : n'est volontairement PAS une vraie
 // pause. Voir main.js, qui ralentit la simulation (frame skip) plutôt que
 // de la stopper pendant que l'overlay est ouvert.
@@ -30,6 +37,11 @@ export let inventoryOpen = false;
 export let WORLD_W = 24000;
 export let WORLD_H = 16000;
 export let camX = 0, camY = 0;
+let aimAssistTarget = null;
+let dashKeyWasDown = false;
+
+const AIM_ASSIST_RANGE = 760;
+const AIM_ASSIST_CONE = 0.22;
 
 // --- Pool de particules --------------------------------------------------
 // Les particules (impacts, morts, explosions...) sont de loin l'entité la
@@ -81,12 +93,18 @@ export function drawEnemies(){
 export function drawPlayerShip(){
   const pl = player; if(!pl) return;
   const profile = pl.profile;
-  push(); translate(pl.x, pl.y); rotate(pl.angle);
+  push(); translate(pl.x, pl.y); rotate(pl.angle + pl.armorRotation);
   const flicker = pl.invuln>0 && frameCount%10<5;
   stroke(flicker ? color(255,150,0) : color(profile.color[0],profile.color[1],profile.color[2]));
-  strokeWeight(2); fill(13,20,36, flicker?100:220); beginShape();
-  profile.shape.forEach(([x,y]) => vertex(x,y));
-  endShape(CLOSE);
+  strokeWeight(2);
+  for(const plate of pl.armor){
+    if(plate.respawnTimer > 0) continue;
+    const alpha = flicker ? 100 : 220;
+    fill(13,20,36, alpha);
+    beginShape(); getPlayerPlateShape(plate).forEach(([x,y]) => vertex(x,y)); endShape(CLOSE);
+  }
+  noStroke(); fill(255, 225, 150, 240); circle(pl.core.x, pl.core.y, pl.core.radius * 2 * PLAYER_SCALE);
+  fill(255, 255, 255, 230); circle(pl.core.x, pl.core.y, pl.core.radius * 0.7 * PLAYER_SCALE);
   pop();
 }
 
@@ -105,6 +123,7 @@ export function startRun(profileId='standard'){
     portalBoss:null, portalEvent:'hidden', portalTimer:0,
   };
   bullets=[]; enemyBullets=[]; enemies=[]; asteroids=[]; xpOrbs=[]; scrapPickups=[]; equipmentPickups=[]; shockwaves=[]; lightningArcs=[];
+  aimAssistTarget = null;
   inventoryOpen = false;
   hyperPortal = null;
   for(const p of particles) p.active = false;
@@ -144,6 +163,9 @@ export function updateRun(){
 }
 
 export function updatePlayer(){
+  const dashKeyDown = typeof keyIsDown === 'function' && keyIsDown(32);
+  if(dashKeyDown && !dashKeyWasDown) requestPlayerDash();
+  dashKeyWasDown = dashKeyDown;
   updateCameraAndAim();
   updateMovement();
   updatePlayerResources();
@@ -292,11 +314,41 @@ function updateCameraAndAim(){
   camX = player.x - width/2;
   camY = player.y - height/2;
   applyShake();
-  const targetAngle = atan2(mouseY + camY - player.y, mouseX + camX - player.x);
+  const mouseAngle = atan2(mouseY + camY - player.y, mouseX + camX - player.x);
+  aimAssistTarget = findAimAssistTarget(mouseAngle);
+  const targetAngle = aimAssistTarget
+    ? blendAimAngle(mouseAngle, atan2(aimAssistTarget.y - player.y, aimAssistTarget.x - player.x), 0.72)
+    : mouseAngle;
   let delta = targetAngle - player.angle;
   while(delta > PI) delta -= TWO_PI;
   while(delta < -PI) delta += TWO_PI;
   player.angle += constrain(delta, -0.22, 0.22);
+}
+
+function findAimAssistTarget(mouseAngle){
+  let bestTarget = null;
+  let bestScore = Infinity;
+  for(const enemy of enemies){
+    const dx = enemy.x - player.x;
+    const dy = enemy.y - player.y;
+    const distance = Math.hypot(dx, dy);
+    if(distance <= 1 || distance > AIM_ASSIST_RANGE) continue;
+    let angleDelta = atan2(dy, dx) - mouseAngle;
+    while(angleDelta > PI) angleDelta -= TWO_PI;
+    while(angleDelta < -PI) angleDelta += TWO_PI;
+    const cone = AIM_ASSIST_CONE + Math.min(0.08, (enemy.r || 0) / distance);
+    if(Math.abs(angleDelta) > cone) continue;
+    const score = Math.abs(angleDelta) * 1000 + distance * 0.08;
+    if(score < bestScore){ bestScore = score; bestTarget = enemy; }
+  }
+  return bestTarget;
+}
+
+function blendAimAngle(firstAngle, secondAngle, amount){
+  let delta = secondAngle - firstAngle;
+  while(delta > PI) delta -= TWO_PI;
+  while(delta < -PI) delta += TWO_PI;
+  return firstAngle + delta * amount;
 }
 
 // Micro screen-shake (dash, impacts...) : décale légèrement la caméra
@@ -319,8 +371,21 @@ function applyShake(){
 // déplacement (voir handlePlayerWeapons).
 function updateMovement(){
   updateDash();
-  if(player.dashTimer > 0) return; // l'impulsion de dash prend le pas sur le déplacement normal
+  if(player.dashTimer > 0){
+    updateShipOpening();
+    return; // l'impulsion de dash prend le pas sur le déplacement normal
+  }
   applyDirectionalMovement();
+  updateShipOpening();
+}
+
+function updateShipOpening(){
+  const currentSpeed = Math.hypot(player.vx, player.vy);
+  const maximumBoostSpeed = player.speed * 2.25;
+  const targetOpening = player.dashTimer > 0
+    ? 1
+    : constrain(currentSpeed / maximumBoostSpeed, 0, 1);
+  player.shipOpening += (targetOpening - player.shipOpening) * 0.16;
 }
 
 function applyDirectionalMovement(){
@@ -329,6 +394,12 @@ function applyDirectionalMovement(){
   const boosting = keys['shift'] && player.boost > 0 && (forward !== 0 || strafe !== 0);
   player.boost = boosting ? Math.max(0, player.boost - 1.8) : Math.min(player.boostMax, player.boost + 0.65 + player.boostRegenBonus);
   const hasInput = forward !== 0 || strafe !== 0;
+  if(hasInput){
+    if(keys['z']) player.lastMoveDirection = 'z';
+    else if(keys['s']) player.lastMoveDirection = 's';
+    else if(keys['q']) player.lastMoveDirection = 'q';
+    else if(keys['d']) player.lastMoveDirection = 'd';
+  }
   const acceleration = 0.34;
   const deceleration = 0.12;
   if(hasInput){
@@ -353,26 +424,18 @@ function applyDirectionalMovement(){
 
 // --- Dash --------------------------------------------------------------
 // Une charge unique, courte et violente (impulsion de ~0.15s, pas un
-// sprint). Déclenchée par un double-tap sur Z/S/Q/D (voir
-// registerDirectionTap, appelée depuis main.js à chaque appui). Se recharge
+// sprint). Déclenchée par Espace dans la dernière direction de déplacement. Se recharge
 // automatiquement avec le temps, et plus vite via l'agressivité : tuer un
 // ennemi, dasher à travers un ennemi ou un projectile, ou tuer PENDANT un
 // dash (recharge instantanée) — de quoi enchaîner dash → kill → dash.
-const DASH_COOLDOWN_FRAMES = 60; // ~1s à 60fps sans bonus de recharge
-const DASH_DURATION_FRAMES = 10; // ~0.16s : une impulsion, pas un déplacement soutenu
-const DOUBLE_TAP_WINDOW = 16;    // ~0.26s à 60fps pour valider un double-tap
-const lastTapFrame = { z:-999, s:-999, q:-999, d:-999 };
+const DASH_COOLDOWN_FRAMES = 240; // ~4s à 60fps sans bonus de recharge
+const DASH_DURATION_FRAMES = 4; // déplacement quasi instantané (~0.07s)
 let dashGrazedEnemies = new Set();
 
-export function registerDirectionTap(direction){
+export function requestPlayerDash(){
   if(gameState !== 'playing' || inventoryOpen || !player) return;
-  const now = frameCount;
-  if(now - lastTapFrame[direction] <= DOUBLE_TAP_WINDOW){
-    lastTapFrame[direction] = -999;
-    requestDash(direction);
-  } else {
-    lastTapFrame[direction] = now;
-  }
+  const activeDirection = ['z', 's', 'q', 'd'].find(direction => keys[direction]);
+  requestDash(activeDirection || player.lastMoveDirection || 'z');
 }
 
 function directionToAngle(direction){
@@ -387,11 +450,12 @@ function directionToAngle(direction){
 function requestDash(direction){
   if(player.dashCooldownTimer > 0 || player.dashTimer > 0) return;
   player.dashAngle = directionToAngle(direction);
-  player.dashDistance = player.speed * 15; // "clic -> BOOM -> nouvelle position"
+  player.dashDistance = player.speed * 36; // blink court, indépendant de la vélocité
   player.dashProgress = 0; player.dashAppliedDistance = 0;
   player.dashDuration = DASH_DURATION_FRAMES;
   player.dashTimer = DASH_DURATION_FRAMES;
   player.dashCooldownTimer = DASH_COOLDOWN_FRAMES;
+  player.vx = 0; player.vy = 0;
   player.invuln = Math.max(player.invuln, DASH_DURATION_FRAMES + 2);
   dashGrazedEnemies = new Set();
   triggerShake(4, 6);
@@ -407,13 +471,13 @@ function updateDash(){
   if(player.dashCooldownTimer > 0) player.dashCooldownTimer--;
   if(player.dashTimer <= 0) return;
   player.dashProgress = Math.min(1, player.dashProgress + 1 / player.dashDuration);
-  const easedProgress = 1 - Math.pow(1 - player.dashProgress, 4);
-  const distance = lerp(0, player.dashDistance, easedProgress);
+  const distance = lerp(0, player.dashDistance, player.dashProgress);
   const step = distance - player.dashAppliedDistance;
   player.x += Math.cos(player.dashAngle) * step;
   player.y += Math.sin(player.dashAngle) * step;
   player.dashAppliedDistance = distance;
   player.dashTimer--;
+  if(player.dashTimer <= 0){ player.vx = 0; player.vy = 0; }
   spawnBurst(player.x, player.y, color(180,107,255,160), 2); // légère traînée
   checkDashGrazes();
 }
@@ -446,21 +510,20 @@ function updatePlayerResources(){
   if(player.regen > 0 && player.hp < player.maxHp) player.hp = Math.min(player.maxHp, player.hp + player.regen / 60);
   if(player.invuln > 0) player.invuln--;
   if(player.fireCooldown > 0) player.fireCooldown--;
-  if(player.reloadTimer > 0){
-    player.reloadTimer--;
-    if(player.reloadTimer === 0) player.ammo = player.maxAmmo;
+  for(const plate of player.armor){
+    if(plate.respawnTimer > 0){
+      plate.respawnTimer--;
+      if(plate.respawnTimer === 0) plate.hp = plate.maxHp;
+    }
   }
 }
 
 function handlePlayerWeapons(){
-  const firing = mouseIsPressed || keys[' '];
-  if(firing && !player.triggerHeld && player.fireCooldown <= 0 && player.reloadTimer <= 0 && player.ammo > 0){
+  const firing = mouseIsPressed;
+  if(player.fireCooldown <= 0){
     firePlayerBullets();
-    player.ammo--;
     player.fireCooldown = player.fireRate;
-    if(player.ammo === 0) player.reloadTimer = player.reloadDuration;
   }
-  player.triggerHeld = firing;
   if(player.laserLevel > 0 && firing) fireLaser();
 }
 
@@ -566,11 +629,11 @@ export function unequipItem(category, index){
   return true;
 }
 
-// Ouvre/ferme l'overlay d'inventaire pendant la run (voir main.js pour le
-// ralenti associé). N'agit que si une run est en cours.
+// Ouvre/ferme l'overlay d'inventaire pendant la run et fige la simulation.
 export function toggleInventory(){
-  if(gameState !== 'playing') return;
+  if(!inventoryOpen && gameState !== 'playing') return;
   inventoryOpen = !inventoryOpen;
+  gameState = inventoryOpen ? 'paused' : 'playing';
   const overlay = document.getElementById('inventory-screen');
   if(overlay) overlay.classList.toggle('hidden', !inventoryOpen);
   if(inventoryOpen) buildInventoryUI();
@@ -700,7 +763,7 @@ export function spawnEnemy(){
   const desiredSpeed = base.speed * speedMult;
   const maxAllowed = (player && player.speed) ? player.speed * 0.75 : desiredSpeed; // keep enemies slower than player
   const finalSpeed = Math.min(desiredSpeed, maxAllowed);
-  enemies.push(new Enemy({ x,y, type, hp: Math.max(1, base.hp*scale), maxHp: Math.max(1, base.hp*scale), speed: finalSpeed, r: base.radius, dmg: base.damage, xp: base.xp, color: base.color, score: base.score, aggroRange: base.aggroRange, fireCooldown: random(60,120), phase: random(TWO_PI), angle:0 }));
+  enemies.push(new Enemy({ x,y, type, hp: Math.max(1, base.hp*scale), maxHp: Math.max(1, base.hp*scale), speed: finalSpeed, r: base.radius, dmg: base.damage, xp: base.xp, color: base.color, score: base.score, aggroRange: base.aggroRange, parts: base.parts?.map(partName => gameData.enemyShapes[partName]), fireCooldown: random(60,120), phase: random(TWO_PI), angle:0 }));
 }
 
 export function updateEnemies(){
@@ -719,7 +782,7 @@ function applySniperLaser(sniper){
   const closestY = sniper.y + Math.sin(sniper.laserAngle) * distanceAlongLaser;
   if(Math.hypot(player.x - closestX, player.y - closestY) > 14) return;
   if(player.invuln > 0) return;
-  player.hp -= sniper.dmg * 1.8;
+  damagePlayerAtPoint(player.x, player.y);
   player.invuln = 45;
   spawnBurst(player.x, player.y, color(255,80,80), 14);
 }
@@ -750,11 +813,16 @@ function spawnMiniboss(){
   else if(edge===2){ x=player.x + random(-width/2,width/2); y=player.y+height/2+margin; }
   else { x=player.x-width/2-margin; y=player.y+random(-height/2,height/2); }
   const scale = difficultyScale();
+  const minibossParts = [
+    gameData.enemyShapes.right.map(([partX, partY]) => [partX + 4, partY]),
+    gameData.enemyShapes.left.map(([partX, partY]) => [partX - 4, partY]),
+  ];
   enemies.push(new Enemy({
     x, y, type:'chaser', isMiniboss:true,
     hp: Math.round(50 + scale*22), maxHp: Math.round(50 + scale*22),
     speed: Math.min(0.85, (player ? player.speed*0.5 : 0.85)),
     r: 30, dmg: 20, xp: 14, color:[255,214,79], score:140,
+    parts: minibossParts,
     fireCooldown: random(60,120), phase: random(TWO_PI), angle:0,
   }));
   flashWaveBanner('MINI-BOSS EN APPROCHE');
@@ -810,13 +878,20 @@ export function updateEnemyBullets(){
     const bullet = enemyBullets[i];
     bullet.update();
     if(isOutsideScreen(bullet, 40)){ enemyBullets.splice(i, 1); continue; }
-    if(!isInRange(bullet, player, bullet.size + 13)) continue;
-    if(player.invuln <= 0) damagePlayerWithBullet(bullet, i);
+    if(!isInRange(bullet, player, bullet.size + 32)) continue;
+    damagePlayerWithBullet(bullet, i);
   }
 }
 
 function damagePlayerWithBullet(bullet, index){
-  player.hp -= bullet.dmg; player.invuln = 40;
+  if(isBulletTouchingPlayerCore(bullet)){
+    enemyBullets.splice(index, 1);
+    spawnBurst(player.x, player.y, color(255,80,80), 24);
+    endRun();
+    return;
+  }
+  damagePlayerAtProjectile(bullet);
+  player.invuln = 8;
   enemyBullets.splice(index, 1);
   spawnBurst(bullet.x, bullet.y, color(255,120,140), 8);
 }
@@ -902,10 +977,6 @@ export function gainXp(n){
     player.lastDamageGain = LEVEL_STAT_GROWTH.dmg + player.dmgPerLevel;
     player.dmg += player.lastDamageGain;
     player.fireRate = Math.max(LEVEL_STAT_GROWTH.minFireRate, player.fireRate - LEVEL_STAT_GROWTH.fireRate);
-    if(player.level % LEVEL_STAT_GROWTH.magazineEvery === 0){
-      player.maxAmmo += LEVEL_STAT_GROWTH.magazine;
-      player.ammo = player.maxAmmo;
-    }
     player.xpNeeded = Math.round(6 + player.level*3.2);
     triggerLevelUp();
   }
@@ -919,10 +990,7 @@ function triggerLevelUp(){
     const damageGain = player.lastDamageGain || LEVEL_STAT_GROWTH.dmg;
     const previousDmg = player.dmg - damageGain;
     const previousFireRate = player.fireRate + LEVEL_STAT_GROWTH.fireRate;
-    const magazineIncrease = player.level % LEVEL_STAT_GROWTH.magazineEvery === 0 ? LEVEL_STAT_GROWTH.magazine : 0;
-    const previousAmmo = player.maxAmmo - magazineIncrease;
-    const magazineRow = magazineIncrease ? `<div>Chargeur <span>${previousAmmo} → ${player.maxAmmo} <b>(+${magazineIncrease})</b></span></div>` : '';
-    stats.innerHTML = `<div class="level-stats-title">STATS DU VAISSEAU</div><div class="level-stats-list"><div>Coque max <span>${previousMaxHp} ➤ ${player.maxHp} <b>(+${LEVEL_STAT_GROWTH.maxHp})</b></span></div><div>Dégâts <span>${previousDmg.toFixed(1)} → ${player.dmg.toFixed(1)} <b>(+${damageGain.toFixed(1)})</b></span></div><div>Cadence <span>${previousFireRate}f → ${player.fireRate}f <b>(-${LEVEL_STAT_GROWTH.fireRate}f)</b></span></div>${magazineRow}</div>`;
+    stats.innerHTML = `<div class="level-stats-title">STATS DU VAISSEAU</div><div class="level-stats-list"><div>Coque max <span>${previousMaxHp} ➤ ${player.maxHp} <b>(+${LEVEL_STAT_GROWTH.maxHp})</b></span></div><div>Dégâts <span>${previousDmg.toFixed(1)} → ${player.dmg.toFixed(1)} <b>(+${damageGain.toFixed(1)})</b></span></div><div>Cadence <span>${previousFireRate}f → ${player.fireRate}f <b>(-${LEVEL_STAT_GROWTH.fireRate}f)</b></span></div></div>`;
   }
   const equipment = document.getElementById('level-equipment');
   if(equipment){
@@ -1141,6 +1209,7 @@ export function checkCollisions(){
     if(hit && bullet.pierce <= 0 && !bounced) bullets.splice(i, 1);
   }
   collidePlayerWithEnemies();
+  collidePlayerWithAsteroids();
 }
 
 function collideBulletWithEnemies(bullet, candidates){
@@ -1150,7 +1219,8 @@ function collideBulletWithEnemies(bullet, candidates){
     if(bullet.hitTargets.has(enemy) || !isBulletTouching(bullet, enemy) || wasRecentlyHit(bullet, enemy)) continue;
     // l'ennemi a pu être retiré du jeu par un autre coup ce même tick
     if(enemies.indexOf(enemy) === -1) continue;
-    damageEnemy(enemy, bullet.dmg);
+    const damageMultiplier = isBulletTouchingCore(bullet, enemy) ? 2.5 : 1;
+    damageEnemy(enemy, bullet.dmg * damageMultiplier);
     bullet.hitTargets.add(enemy);
     if(bullet.crit) triggerChainLightning(enemy);
     spawnBurst(bullet.x, bullet.y, color(enemy.color[0], enemy.color[1], enemy.color[2]), 5);
@@ -1194,6 +1264,114 @@ function isBulletTouching(bullet, target){
   return Math.hypot(target.x - closestX, target.y - closestY) < target.r + bullet.size / 2;
 }
 
+function isBulletTouchingCore(bullet, enemy){
+  if(!enemy.core) return false;
+  const coreAngle = enemy.angle + (enemy.parts.length ? HALF_PI : 0);
+  const coreCos = Math.cos(coreAngle), coreSin = Math.sin(coreAngle);
+  const coreX = enemy.x + enemy.core.x * coreCos - enemy.core.y * coreSin;
+  const coreY = enemy.y + enemy.core.x * coreSin + enemy.core.y * coreCos;
+  return isBulletTouchingPoint(bullet, coreX, coreY, enemy.core.r);
+}
+
+function isBulletTouchingPoint(bullet, targetX, targetY, targetRadius){
+  const startX = bullet.previousX ?? bullet.x;
+  const startY = bullet.previousY ?? bullet.y;
+  const deltaX = bullet.x - startX;
+  const deltaY = bullet.y - startY;
+  const segmentLengthSquared = deltaX * deltaX + deltaY * deltaY;
+  const projection = segmentLengthSquared === 0
+    ? 0
+    : constrain(((targetX - startX) * deltaX + (targetY - startY) * deltaY) / segmentLengthSquared, 0, 1);
+  const closestX = startX + deltaX * projection;
+  const closestY = startY + deltaY * projection;
+  return Math.hypot(targetX - closestX, targetY - closestY) < targetRadius + bullet.size / 2;
+}
+
+function isBulletTouchingPlayerCore(bullet){
+  const core = playerLocalToWorld(player.core.x, player.core.y);
+  return isBulletTouchingPoint(bullet, core.x, core.y, player.core.radius * PLAYER_SCALE);
+}
+
+function getPlayerPlateShape(plate){
+  const spread = player.shipOpening * 12;
+  if(spread === 0) return plate.shape.map(([x, y]) => [x * PLAYER_SCALE, y * PLAYER_SCALE]);
+  let centerX = 0, centerY = 0;
+  for(const [x, y] of plate.shape){ centerX += x; centerY += y; }
+  centerX /= plate.shape.length || 1;
+  centerY /= plate.shape.length || 1;
+  const distance = Math.hypot(centerX, centerY) || 1;
+  const offsetX = centerX / distance * spread;
+  const offsetY = centerY / distance * spread;
+  return plate.shape.map(([x, y]) => [(x + offsetX) * PLAYER_SCALE, (y + offsetY) * PLAYER_SCALE]);
+}
+
+function playerWorldToLocal(x, y){
+  const dx = x - player.x, dy = y - player.y;
+  const angle = player.angle + player.armorRotation;
+  return { x: dx * Math.cos(angle) + dy * Math.sin(angle), y: -dx * Math.sin(angle) + dy * Math.cos(angle) };
+}
+
+function playerLocalToWorld(x, y){
+  const angle = player.angle + player.armorRotation;
+  return {
+    x: player.x + x * Math.cos(angle) - y * Math.sin(angle),
+    y: player.y + x * Math.sin(angle) + y * Math.cos(angle),
+  };
+}
+
+function damagePlayerPlate(plate){
+  if(!plate || plate.respawnTimer > 0) return false;
+  plate.hp = Math.max(0, plate.hp - 1);
+  if(plate.hp === 0) plate.respawnTimer = gameData.playerArmor.respawnFrames;
+  return true;
+}
+
+function damagePlayerAtPoint(x, y){
+  const localPoint = playerWorldToLocal(x, y);
+  for(const plate of player.armor){
+    if(plate.respawnTimer > 0) continue;
+    if(isPointInsidePolygon(localPoint.x, localPoint.y, getPlayerPlateShape(plate))) return damagePlayerPlate(plate);
+  }
+  return false;
+}
+
+function damagePlayerAtProjectile(bullet){
+  const start = playerWorldToLocal(bullet.previousX ?? bullet.x, bullet.previousY ?? bullet.y);
+  const end = playerWorldToLocal(bullet.x, bullet.y);
+  for(const plate of player.armor){
+    if(plate.respawnTimer > 0) continue;
+    if(segmentTouchesPolygon(start, end, getPlayerPlateShape(plate))) return damagePlayerPlate(plate);
+  }
+  return false;
+}
+
+function isPointInsidePolygon(x, y, polygon){
+  let inside = false;
+  for(let i=0, j=polygon.length-1; i<polygon.length; j=i++){
+    const [xi, yi] = polygon[i], [xj, yj] = polygon[j];
+    const crosses = (yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi;
+    if(crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function segmentsIntersect(a, b, c, d){
+  const orientation = (p, q, r) => (q.x-p.x)*(r.y-p.y) - (q.y-p.y)*(r.x-p.x);
+  const o1 = orientation(a, b, c), o2 = orientation(a, b, d);
+  const o3 = orientation(c, d, a), o4 = orientation(c, d, b);
+  return ((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0))
+    && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0));
+}
+
+function segmentTouchesPolygon(start, end, polygon){
+  if(isPointInsidePolygon(start.x, start.y, polygon) || isPointInsidePolygon(end.x, end.y, polygon)) return true;
+  for(let i=0; i<polygon.length; i++){
+    const current = polygon[i], next = polygon[(i + 1) % polygon.length];
+    if(segmentsIntersect(start, end, { x: current[0], y: current[1] }, { x: next[0], y: next[1] })) return true;
+  }
+  return false;
+}
+
 function wasRecentlyHit(bullet, target){
   return bullet.lastHit === target && bullet.ricochetCooldown > 0;
 }
@@ -1202,8 +1380,18 @@ function collidePlayerWithEnemies(){
   if(player.invuln > 0) return;
   for(const enemy of enemies){
     if(!isInRange(enemy, player, enemy.r + 14)) continue;
-    player.hp -= enemy.dmg; player.invuln = 45;
+    damagePlayerAtPoint(enemy.x, enemy.y); player.invuln = 45;
     spawnBurst(player.x, player.y, color(255,120,140), 10);
+    break;
+  }
+}
+
+function collidePlayerWithAsteroids(){
+  if(player.invuln > 0) return;
+  for(const asteroid of asteroids){
+    if(!isInRange(asteroid, player, asteroid.r + 14)) continue;
+    damagePlayerAtPoint(asteroid.x, asteroid.y); player.invuln = 45;
+    spawnBurst(player.x, player.y, color(255,184,79), 10);
     break;
   }
 }
@@ -1299,10 +1487,14 @@ function drawTurrets(){
 }
 
 export function updateHUD(){
-  const hpFill = document.getElementById('hp-fill'); if(hpFill) hpFill.style.width = Math.max(0,(player.hp/player.maxHp*100))+'%';
-  const hp = document.getElementById('hp-val'); if(hp) hp.innerText = `${Math.ceil(Math.max(0, player.hp))} / ${player.maxHp}`;
-  const xpFill = document.getElementById('xp-fill'); if(xpFill) xpFill.style.width = (player.xp/player.xpNeeded*100)+'%';
-  const lvl = document.getElementById('lvl-val'); if(lvl) lvl.innerText = player.level;
+  const hpRatio = player.maxHp ? constrain(player.hp / player.maxHp, 0, 1) : 0;
+  const vignette = document.getElementById('damage-vignette');
+  if(vignette) vignette.style.opacity = hpRatio >= 0.7 ? '0' : String(Math.min(0.6, (0.7 - hpRatio) / 0.7 * 0.6));
+  const critical = document.getElementById('hp-critical');
+  const criticalValue = document.getElementById('hp-critical-val');
+  if(critical) critical.style.display = hpRatio < 0.3 ? 'block' : 'none';
+  if(criticalValue) criticalValue.innerText = `${Math.ceil(player.hp)} / ${player.maxHp}`;
+  const xpFill = document.querySelector('#xp-sliver > div'); if(xpFill) xpFill.style.width = (player.xp/player.xpNeeded*100)+'%';
   const wave = document.getElementById('wave-val'); if(wave) wave.innerText = Math.max(1, Math.floor(difficultyScale()));
   const scrapRun = document.getElementById('scrap-run-val'); if(scrapRun) scrapRun.innerText = run.scrapEarned;
   const score = document.getElementById('score-val'); if(score) score.innerText = run.score;
@@ -1316,22 +1508,31 @@ export function updateHUD(){
       ready: 'OUVERT',
     }[run.portalEvent];
     portal.innerText = portalStatus || `À ${run.nextPortalScore}`;
+    const portalStatusLine = document.getElementById('portal-status');
+    if(portalStatusLine) portalStatusLine.classList.toggle('actionable', run.portalEvent === 'found' || run.portalEvent === 'ready');
   }
-  const mode = document.getElementById('dash-val'); if(mode) mode.innerText = player.dashCooldownTimer <= 0 ? 'PRÊT' : '...';
-  const boost = document.getElementById('boost-fill'); if(boost) boost.style.width = (player.boost/player.boostMax*100)+'%';
-  const dashFill = document.getElementById('dash-fill'); if(dashFill) dashFill.style.width = (100 - Math.min(100, player.dashCooldownTimer/DASH_COOLDOWN_FRAMES*100)) + '%';
+  const dashGlyph = document.getElementById('dash-glyph');
+  if(dashGlyph){
+    const ready = player.dashCooldownTimer <= 0;
+    dashGlyph.style.opacity = ready ? '1' : '0.35';
+    dashGlyph.classList.toggle('ready', ready);
+  }
+  const boostGlyph = document.getElementById('boost-glyph');
+  if(boostGlyph){
+    const boostRatio = player.boostMax ? constrain(player.boost / player.boostMax, 0, 1) : 0;
+    boostGlyph.style.opacity = String(0.25 + boostRatio * 0.75);
+    boostGlyph.classList.toggle('ready', boostRatio >= 0.6);
+  }
   const maxEnemies = getMaxEnemies();
   const enemyCount = document.getElementById('enemy-count'); if(enemyCount) enemyCount.innerText = enemies.length;
-  const enemyFill = document.getElementById('enemy-fill'); if(enemyFill) enemyFill.style.width = (maxEnemies ? Math.min(100, enemies.length/maxEnemies*100) : 0) + '%';
+  const enemyRatio = maxEnemies ? Math.min(1, enemies.length / maxEnemies) : 0;
+  const enemyFill = document.getElementById('enemy-fill'); if(enemyFill){ enemyFill.style.width = enemyRatio * 100 + '%'; enemyFill.style.opacity = 0.4 + 0.5 * enemyRatio; }
 }
 
 export function drawCrosshair(){
   if(!player) return;
   const centerX = mouseX;
   const centerY = mouseY;
-  const radius = 28;
-  const barWidth = 12;
-  const barAngles = [-Math.PI * 0.72, 0, Math.PI * 0.72];
   push();
   translate(centerX, centerY);
   noFill();
@@ -1339,16 +1540,10 @@ export function drawCrosshair(){
   circle(0, 0, 8);
   line(-13, 0, -6, 0); line(6, 0, 13, 0);
   line(0, -13, 0, -6); line(0, 6, 0, 13);
-  for(let index = 0; index < player.maxAmmo; index++){
-    const angle = barAngles.length === player.maxAmmo
-      ? barAngles[index]
-      : -Math.PI * 0.72 + index * (Math.PI * 1.44 / Math.max(1, player.maxAmmo - 1));
-    const x = Math.cos(angle) * radius;
-    const y = Math.sin(angle) * radius;
-    const loaded = index < player.ammo && player.reloadTimer <= 0;
-    stroke(loaded ? color(255, 184, 79, 235) : color(118, 134, 168, 100));
-    strokeWeight(loaded ? 3 : 1.5);
-    line(x - Math.sin(angle) * barWidth / 2, y + Math.cos(angle) * barWidth / 2, x + Math.sin(angle) * barWidth / 2, y - Math.cos(angle) * barWidth / 2);
+  if(aimAssistTarget){
+    stroke(255, 184, 79, 220); strokeWeight(1);
+    circle(aimAssistTarget.x - camX - centerX, aimAssistTarget.y - camY - centerY, (aimAssistTarget.r || 12) * 2 + 10);
+    line(0, 0, aimAssistTarget.x - camX - centerX, aimAssistTarget.y - camY - centerY);
   }
   pop();
 }

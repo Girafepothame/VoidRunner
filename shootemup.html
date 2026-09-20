@@ -10,25 +10,25 @@
 
   <div id="hud" class="hidden">
     <div id="wave-progress">
-      <div class="wave-progress-label">MENACE <span id="wave-val">1</span> · ENNEMIS <span id="enemy-count">0</span></div>
+      <div class="wave-progress-label">MENACE <span id="wave-val">1</span></div>
       <div class="wave-progress-bg"><div id="enemy-fill"></div></div>
+      <div id="enemy-count">0</div>
     </div>
-    <div class="hud-block">
-      <div class="stat-label">Coque <span id="hp-val">100 / 100</span></div>
-      <div class="bar-bg"><div class="bar-fill" id="hp-fill"></div></div>
-      <div class="stat-label" style="margin-top:8px;">Niveau <span id="lvl-val">1</span></div>
-      <div class="bar-bg"><div class="bar-fill" id="xp-fill"></div></div>
-      <div class="stat-label mode-label" style="margin-top:8px;">Dash <span id="dash-val">PRÊT</span></div>
-      <div class="bar-bg"><div class="bar-fill" id="dash-fill"></div></div>
-      <div class="bar-bg boost-bar"><div class="bar-fill" id="boost-fill"></div></div>
-      <div class="boost-caption">MAJ · BOOST</div>
+    <div id="damage-vignette"></div>
+    <div id="hp-critical">COQUE CRITIQUE <span id="hp-critical-val"></span></div>
+    <div id="dash-glyph" aria-hidden="true">
+      <svg viewBox="0 0 26 30"><polygon points="13,1 24,7.5 24,22.5 13,29 2,22.5 2,7.5" /></svg>
     </div>
-    <div id="run-counters">
-      <div class="run-counter score-counter"><span class="counter-label">SCORE</span><b id="score-val">0</b></div>
-      <div class="run-counter scrap-counter"><span class="counter-label">OR</span><b id="scrap-run-val">0</b></div>
-      <div class="run-counter biome-counter"><span class="counter-label">BIOME</span><b id="biome-val">NÉBULEUSE</b></div>
-      <div class="run-counter portal-counter"><span class="counter-label">PORTAIL</span><b id="portal-val">À 500</b></div>
+    <div id="boost-glyph" aria-hidden="true">
+      <svg viewBox="0 0 26 30"><polygon points="13,1 24,7.5 24,22.5 13,29 2,22.5 2,7.5" /></svg>
     </div>
+    <div id="run-line">
+      <span>SCORE <b id="score-val">0</b></span>
+      <span>OR <b id="scrap-run-val">0</b></span>
+      <span>BIOME <b id="biome-val">NÉBULEUSE</b></span>
+      <span id="portal-status">PORTAIL <b id="portal-val">À 500</b></span>
+    </div>
+    <div id="xp-sliver"><div></div></div>
   </div>
 
   <div id="wave-banner"></div>
@@ -53,6 +53,7 @@
       <div class="slot-row" id="inventory-storage"></div>
       <div class="footnote">Clic sur un objet stocké pour l'équiper · clic sur un objet équipé pour le retirer · I ou Echap pour fermer</div>
     </div>
+    <div id="inventory-tooltip" class="inventory-tooltip hidden" role="tooltip"></div>
   </div>
 
   <div id="menu-screen" class="screen">
@@ -63,7 +64,7 @@
       <button class="btn" onclick="startRun()">Nouvelle Partie</button>
       <button class="btn" onclick="openShop('menu')">Atelier</button>
     </div>
-    <div class="footnote">Souris : viser · Z/S : avancer/reculer · Q/D : strafe · double-tap Z/S/Q/D : dash · Clic / Espace : tirer · I : inventaire</div>
+    <div class="footnote">Souris : viser · Z/S : avancer/reculer · Q/D : strafe · Shift : accélérer · Espace : dash · Clic : laser · I : inventaire</div>
   </div>
 
   <div id="levelup-screen" class="screen hidden">
