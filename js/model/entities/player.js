@@ -1,4 +1,4 @@
-import { SLOT_DEFS, SHIP_PROFILES } from '../../meta.js';
+import { SHIP_PROFILES } from '../../meta.js';
 import gameData from '../../data/game.json' with { type: 'json' };
 
 export class Player {
@@ -9,6 +9,7 @@ export class Player {
     this.profile = profile;
     this.baseSpeed = profile.speed; this.speed = profile.speed;
     this.vx = 0; this.vy = 0;
+    this.trailPoints = [];
     this.baseMaxHp = 100; this.hp = 100; this.maxHp = 100;
     this.core = gameData.playerArmor.core;
     this.armorRotation = (gameData.playerArmor.rotationDegrees || 0) * Math.PI / 180;
@@ -20,7 +21,9 @@ export class Player {
       respawnTimer: 0,
     }));
     this.fireCooldown = 0; this.fireRate = profile.fireRate;
-    this.dmg = profile.dmg; this.dmgPerLevel = 0; this.lastDamageGain = 0; this.bulletSpeed = 50; this.bulletLength = 24; this.bulletSize = 3;
+    this.magazineSize = 3; this.ammo = this.magazineSize;
+    this.reloadDuration = 60; this.reloadTimer = 0;
+    this.dmg = profile.dmg; this.bulletSpeed = 50; this.bulletLength = 24; this.bulletSize = 3;
     this.multishot = profile.multishot; this.pierce = 0; this.critChance = 0.05; this.regen = 0; this.boostRegenBonus = 0;
     this.magnet = 60; this.explosive = false;
     this.explosionRadius = 42; this.explosionDamage = 0.2;
@@ -30,7 +33,8 @@ export class Player {
     this.lives = 0; this.invuln = 0; this.level = 1; this.xp = 0; this.xpNeeded = 6;
     this.thrust = 0; this.upgradeCounts = {};
     this.lastMoveDirection = 'z';
-    this.shipOpening = 0;
+    this.aimOpening = 0;
+    this.wingRecoil = 0;
     this.boost = 100; this.boostMax = 100;
     this.dashCooldownTimer = 0;
     this.dashTimer = 0;
@@ -39,11 +43,5 @@ export class Player {
     this.dashAngle = 0;
     this.dashProgress = 0;
     this.dashAppliedDistance = 0;
-    this.loadout = {
-      drone: new Array(SLOT_DEFS.drone.max).fill(null),
-      reactor: new Array(SLOT_DEFS.reactor.max).fill(null),
-      hull: new Array(SLOT_DEFS.hull.max).fill(null),
-    };
-    this.inventory = new Array(5).fill(null);
   }
 }

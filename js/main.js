@@ -35,11 +35,12 @@ function drawStarfield(){
 	}
 }
 
-function positionHudGlyphs(){
-	const dash = document.getElementById('dash-glyph');
-	const boost = document.getElementById('boost-glyph');
-	if(dash) { dash.style.left = `${mouseX - 43}px`; dash.style.top = `${mouseY - 15}px`; }
-	if(boost) { boost.style.left = `${mouseX + 17}px`; boost.style.top = `${mouseY - 15}px`; }
+function positionCursorAmmo(){
+ const ammoStack = document.getElementById('cursor-ammo-stack');
+ if(ammoStack) {
+	 ammoStack.style.left = `${Math.min(mouseX + 20, width - 26)}px`;
+	 ammoStack.style.top = `${Math.max(8, Math.min(mouseY - 8, height - 40))}px`;
+ }
 }
 
 function _setup(){
@@ -61,7 +62,7 @@ function _draw(){ background(6,9,18); drawStarfield();
 	else if(gameplay.gameState !== 'menu'){ gameplay.drawEntities(); }
 	pop();
 	if(gameplay.gameState === 'playing'){ gameplay.drawEnemyIndicators(); gameplay.drawPortalIndicator(); }
-	if(gameplay.gameState === 'playing' && !gameplay.inventoryOpen){ gameplay.drawCrosshair(); positionHudGlyphs(); noCursor(); }
+	if(gameplay.gameState === 'playing' && !gameplay.inventoryOpen){ gameplay.drawCrosshair(); positionCursorAmmo(); noCursor(); }
 	else { cursor(); }
 	// HUD and overlays
 	if(gameplay.gameState === 'playing'){ gameplay.updateHUD(); }
@@ -70,15 +71,34 @@ function _draw(){ background(6,9,18); drawStarfield();
 
 
 // Input bindings
-function _mousePressed(){ return false; }
+function _mousePressed(event){
+	const button = event?.button;
+	if(button === 2 || (button === undefined && mouseButton === RIGHT)){
+		gameplay.setRightMouseDown(true);
+		return false;
+	}
+	if(button === 0 || (button === undefined && mouseButton === LEFT)){
+		gameplay.setFireButtonDown(true);
+		return false;
+	}
+	return false;
+}
+function _mouseReleased(event){
+	const button = event?.button;
+	if(button === 2 || (button === undefined && mouseButton === RIGHT)) gameplay.setRightMouseDown(false);
+	if(button === 0 || (button === undefined && mouseButton === LEFT)) gameplay.setFireButtonDown(false);
+	return false;
+}
 function _keyPressed(){
+	if(key === 'F12' || keyCode === 123){
+		return true;
+	}
 	if(key === 'F3'){
 		if(gameplay.gameState === 'debug') closeDebugMenu();
 		else openDebugMenu();
 		return false;
 	}
 	if(key === 'i' || key === 'I'){
-		gameplay.toggleInventory();
 		return false;
 	}
 	if(key === 'Escape'){
@@ -88,6 +108,7 @@ function _keyPressed(){
 		return false;
 	}
 	const lower = key.toLowerCase();
+	if(lower === 'r') { gameplay.requestPlayerReload(); return false; }
 	if(key === ' ' || key === 'Spacebar' || keyCode === 32){ gameplay.requestPlayerDash(); return false; }
 	if(typeof gameplay.keys !== 'undefined') gameplay.keys[lower] = true;
 	return false;
@@ -95,7 +116,9 @@ function _keyPressed(){
 function _keyReleased(){ if(typeof gameplay.keys !== 'undefined') gameplay.keys[key.toLowerCase()] = false; return false; }
 // Wire p5 global callbacks to module functions
 window.setup = _setup; window.windowResized = _windowResized; window.draw = _draw;
-window.mousePressed = _mousePressed; window.keyPressed = _keyPressed; window.keyReleased = _keyReleased;
+window.mousePressed = _mousePressed; window.mouseReleased = _mouseReleased; window.keyPressed = _keyPressed; window.keyReleased = _keyReleased;
+window.addEventListener('blur', () => { gameplay.setRightMouseDown(false); gameplay.setFireButtonDown(false); });
+window.addEventListener('contextmenu', event => event.preventDefault());
 
 // Expose startRun/openShop on window so buttons still work
 window.startRun = gameplay.startRun; window.showScreen = showScreen; window.openShop = openShop; window.closeShop = closeShop;

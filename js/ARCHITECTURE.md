@@ -10,12 +10,12 @@ Les fichiers de domaine (`combat.js`, `pickups.js`, etc.) sont les sources uniqu
 
 ## Controller
 
-- `gameplay.js` orchestre la run : etat, mouvement, spawn, collisions, progression et inventaire.
+- `gameplay.js` orchestre la run : etat, mouvement, spawn, collisions et progression.
 - `main.js` adapte p5.js et les entrees clavier/souris au controleur.
 
 ## View
 
-- `ui.js` gere les ecrans DOM, l'atelier, l'inventaire et les tooltips.
+- `ui.js` gere les ecrans DOM et les choix de progression.
 - Les entites conservent pour l'instant leur methode `draw()` afin de garder le rendu p5.js stable pendant la separation du modele.
 
 ## Regle de dependance

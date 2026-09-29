@@ -46,13 +46,13 @@ class Chunk {
     const density = Math.min(1, dist / 8);
 
     // --- Champ d'astéroïdes ---
-    const nbAsteroids = Math.floor(2 + chunkRandom(this.cx, this.cy, 1) * (4 + density * 6));
+    const nbAsteroids = 1 + Math.floor(chunkRandom(this.cx, this.cy, 1) * (2 + density * 2));
     for (let i = 0; i < nbAsteroids; i++) {
       const x = this.worldX + chunkRandom(this.cx, this.cy, 100 + i) * CHUNK_SIZE;
       const y = this.worldY + chunkRandom(this.cx, this.cy, 200 + i) * CHUNK_SIZE;
-      const r = 18 + chunkRandom(this.cx, this.cy, 300 + i) * 24;
+      const r = 36 + chunkRandom(this.cx, this.cy, 300 + i) * 32;
       const rewardType = chunkRandom(this.cx, this.cy, 400 + i) < 0.5 ? 'xp' : 'scrap';
-      const hp = Math.round(10 + density * 20);
+      const hp = Math.round(35 + density * 45);
 
       const asteroid = new Asteroid({
         x, y,

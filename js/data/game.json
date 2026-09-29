@@ -5,8 +5,8 @@
       "tagline": "Profil équilibré",
       "details": "Vitesse et cadence standard",
       "speed": 5,
-      "fireRate": 20,
-      "dmg": 1,
+      "fireRate": 8,
+      "dmg": 5,
       "multishot": 1,
       "color": [255, 255, 255],
       "shape": [[24, 0], [0, 11], [-11, 0], [0, -11]]
@@ -24,32 +24,6 @@
       "reactor": [[4.5,13.5],[9,22.5],[4.5,31.5],[-4.5,31.5],[-9,22.5],[-4.5,13.5]]
     }
   },
-  "slots": {
-    "drone": {
-      "name": "Drone",
-      "desc": "Tourelle latérale automatique visant le curseur",
-      "max": 2,
-      "costs": [900, 1600]
-    },
-    "reactor": {
-      "name": "Réacteur",
-      "desc": "Améliore le boost et la régénération",
-      "max": 2,
-      "costs": [1100, 1900]
-    },
-    "hull": {
-      "name": "Coque",
-      "desc": "Renforce la coque et ses systèmes de survie",
-      "max": 3,
-      "costs": [700, 1300, 2200]
-    }
-  },
-  "levelGrowth": {
-    "maxHp": 10,
-    "dmg": 1,
-    "fireRate": 1,
-    "minFireRate": 4
-  },
   "biomes": [
     { "name": "NÉBULEUSE", "color": [57, 255, 176] },
     { "name": "ABYSSE", "color": [180, 107, 255] },
@@ -61,10 +35,6 @@
     "nextBiomeScore": 350,
     "eventDurationMaxSeconds": 120,
     "eventDurationMinSeconds": 90
-  },
-  "enemyShapes": {
-    "right": [[4,-44],[12,-52],[20,-12],[28,-4],[20,4],[12,4],[4,12],[4,-4],[8,-12],[4,-20]],
-    "left": [[-4,-44],[-12,-52],[-20,-12],[-28,-4],[-20,4],[-12,4],[-4,12],[-4,-4],[-8,-12],[-4,-20]]
   },
   "danger": {
     "distancePerChunk": 0.35,
@@ -80,37 +50,8 @@
       "xp": 1,
       "color": [255, 79, 126],
       "score": 10,
+      "parts": [],
       "aggroRange": 560
-    },
-    "shooter": {
-      "hp": 14,
-      "speed": 0.7,
-      "radius": 15,
-      "damage": 8,
-      "xp": 3,
-      "color": [255, 140, 80],
-      "score": 16,
-      "aggroRange": 840
-    },
-    "zigzag": {
-      "hp": 6,
-      "speed": 1.2,
-      "radius": 9,
-      "damage": 8,
-      "xp": 2,
-      "color": [190, 100, 255],
-      "score": 14,
-      "aggroRange": 640
-    },
-    "sniper": {
-      "hp": 9,
-      "speed": 0.5,
-      "radius": 12,
-      "damage": 9,
-      "xp": 4,
-      "color": [255, 60, 60],
-      "score": 22,
-      "aggroRange": 1040
     }
   }
 }
