@@ -503,45 +503,6 @@ canvas {
   gap: 16px;
   pointer-events: none;
 }
-#health-status {
-  display: grid;
-  align-content: center;
-  gap: 5px;
-  width: 126px;
-  color: var(--color-text-dim);
-  font-family: var(--font-heading);
-  font-size: 9px;
-  letter-spacing: 1px;
-}
-.status-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-#health-count {
-  color: var(--color-primary);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-#health-count {
-  font-size: 9px;
-}
-#health-meter {
-  height: 4px;
-  overflow: hidden;
-  background: var(--color-border);
-}
-#health-fill {
-  width: 100%;
-  height: 100%;
-  background: var(--color-primary);
-  box-shadow: 0 0 6px rgba(57, 255, 176, 0.45);
-  transition: width 0.12s linear, background 0.12s ease;
-}
-#health-fill.critical {
-  background: var(--color-danger);
-  box-shadow: 0 0 6px rgba(255, 61, 94, 0.45);
-}
 .ability-status {
   display: flex;
   align-items: center;
@@ -558,7 +519,6 @@ canvas {
   stroke-width: 1.5;
 }
 #dash-glyph svg { stroke: var(--color-secondary); }
-#boost-glyph svg { stroke: var(--color-accent); }
 .ability-status span {
   display: grid;
   gap: 2px;
@@ -573,7 +533,6 @@ canvas {
   font-size: 9px;
 }
 #dash-glyph.ready { filter: drop-shadow(0 0 5px var(--color-secondary)); }
-#boost-glyph.ready { filter: drop-shadow(0 0 5px var(--color-accent)); }
 #cursor-ammo-stack {
   position: absolute;
   display: block;
@@ -611,20 +570,7 @@ canvas {
   transition: opacity 0.12s linear;
   z-index: 0;
 }
-#hp-critical {
-  position: absolute;
-  left: 50%;
-  bottom: 44px;
-  transform: translateX(-50%);
-  display: none;
-  color: var(--color-danger);
-  font-size: 10px;
-  letter-spacing: 2px;
-  text-shadow: 0 0 8px rgba(255, 61, 94, 0.75);
-  white-space: nowrap;
-}
-#dash-glyph,
-#boost-glyph {
+#dash-glyph {
   position: absolute;
   width: 26px;
   height: 30px;
@@ -633,8 +579,7 @@ canvas {
   z-index: 2;
   transition: opacity 0.12s ease, filter 0.12s ease;
 }
-#dash-glyph svg,
-#boost-glyph svg {
+#dash-glyph svg {
   display: block;
   width: 100%;
   height: 100%;
@@ -642,9 +587,7 @@ canvas {
   stroke-width: 1.5;
 }
 #dash-glyph svg { stroke: var(--color-secondary); }
-#boost-glyph svg { stroke: var(--color-accent); }
 #dash-glyph.ready { filter: drop-shadow(0 0 6px var(--color-secondary)); }
-#boost-glyph.ready { filter: drop-shadow(0 0 6px var(--color-accent)); }
 #xp-sliver {
   position: fixed;
   left: 0;
@@ -668,7 +611,6 @@ canvas {
     bottom: 12px;
     gap: 8px;
   }
-  #health-status { width: 90px; }
   .ability-status {
     min-width: 45px;
     gap: 4px;

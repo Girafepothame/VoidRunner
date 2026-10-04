@@ -198,7 +198,6 @@ export function drawPlayerShip(){
   const shipColor = flicker ? color(255,150,0) : color(profile.color[0],profile.color[1],profile.color[2]);
   stroke(shipColor); strokeWeight(1); fill(shipColor);
   for(const plate of pl.armor){
-    if(plate.respawnTimer > 0) continue;
     beginShape(); getPlayerPlateShape(plate, true).forEach(([x,y]) => vertex(x,y)); endShape(CLOSE);
   }
   noStroke(); fill(255, 225, 150, 240); circle(pl.core.x, pl.core.y, pl.core.radius * 2 * PLAYER_SCALE);
@@ -315,8 +314,6 @@ function handlePlayerDefeat(){
 }
 
 function updateCameraAndAim(){
-  // Monde infini : la caméra suit simplement le joueur, sans être clampée
-  // dans des bornes de monde fixes.
   camX = player.x - width/2;
   camY = player.y - height/2;
   applyShake();
@@ -557,12 +554,6 @@ function updatePlayerResources(){
     player.reloadTimer--;
     if(player.reloadTimer === 0) player.ammo = player.magazineSize;
   }
-  for(const plate of player.armor){
-    if(plate.respawnTimer > 0){
-      plate.respawnTimer--;
-      if(plate.respawnTimer === 0) plate.hp = plate.maxHp;
-    }
-  }
 }
 
 function handlePlayerWeapons(){
@@ -761,8 +752,12 @@ export function spawnEnemy(){
 }
 
 export function updateEnemies(){
+  for(const enemy of enemies){
+    enemy.flockX = enemy.x;
+    enemy.flockY = enemy.y;
+  }
   for(const e of enemies){
-    e.update(player, asteroids);
+    e.update(player, asteroids, enemies);
   }
 }
 
@@ -863,7 +858,7 @@ export function updateEnemyBullets(){
     bullet.update();
     if(bullet.exploded){ enemyBullets.splice(i, 1); continue; }
     if(bullet.isLaser){
-      if(!bullet.hasHit && damagePlayerAtProjectile(bullet)){
+      if(!bullet.hasHit && damagePlayerAtProjectile(bullet, 28)){
         bullet.hasHit = true;
         player.invuln = 8;
         spawnBurst(player.x, player.y, color(255, 120, 180), 12);
@@ -877,16 +872,11 @@ export function updateEnemyBullets(){
 }
 
 function damagePlayerWithBullet(bullet, index){
-  if(isBulletTouchingPlayerCore(bullet)){
-    enemyBullets.splice(index, 1);
-    spawnBurst(player.x, player.y, color(255,80,80), 24);
-    endRun();
-    return;
+  if(damagePlayerAtProjectile(bullet)){
+    player.invuln = 8;
+    spawnBurst(bullet.x, bullet.y, color(255,120,140), 8);
   }
-  damagePlayerAtProjectile(bullet);
-  player.invuln = 8;
   enemyBullets.splice(index, 1);
-  spawnBurst(bullet.x, bullet.y, color(255,120,140), 8);
 }
 
 export function drawBullets(){
@@ -1233,25 +1223,6 @@ function isBulletTouching(bullet, target){
   return Math.hypot(target.x - closestX, target.y - closestY) < targetRadius + bullet.size / 2;
 }
 
-function isBulletTouchingPoint(bullet, targetX, targetY, targetRadius){
-  const startX = bullet.previousX ?? bullet.x;
-  const startY = bullet.previousY ?? bullet.y;
-  const deltaX = bullet.x - startX;
-  const deltaY = bullet.y - startY;
-  const segmentLengthSquared = deltaX * deltaX + deltaY * deltaY;
-  const projection = segmentLengthSquared === 0
-    ? 0
-    : constrain(((targetX - startX) * deltaX + (targetY - startY) * deltaY) / segmentLengthSquared, 0, 1);
-  const closestX = startX + deltaX * projection;
-  const closestY = startY + deltaY * projection;
-  return Math.hypot(targetX - closestX, targetY - closestY) < targetRadius + bullet.size / 2;
-}
-
-function isBulletTouchingPlayerCore(bullet){
-  const core = playerLocalToWorld(player.core.x, player.core.y);
-  return isBulletTouchingPoint(bullet, core.x, core.y, player.core.radius * PLAYER_SCALE);
-}
-
 function getPlayerPlateShape(plate, visual = false){
   const aimSpread = player.aimOpening * 10;
   let centerX = 0;
@@ -1270,40 +1241,22 @@ function playerWorldToLocal(x, y){
   return { x: dx * Math.cos(angle) + dy * Math.sin(angle), y: -dx * Math.sin(angle) + dy * Math.cos(angle) };
 }
 
-function playerLocalToWorld(x, y){
-  const angle = player.angle + player.armorRotation;
-  return {
-    x: player.x + x * Math.cos(angle) - y * Math.sin(angle),
-    y: player.y + x * Math.sin(angle) + y * Math.cos(angle),
-  };
-}
-
-function damagePlayerPlate(plate){
-  if(!plate || plate.respawnTimer > 0) return false;
-  plate.hp = Math.max(0, plate.hp - 1);
-  if(plate.hp === 0) plate.respawnTimer = gameData.playerArmor.respawnFrames;
+function damagePlayer(damage){
+  if(player.invuln > 0 || player.hp <= 0) return false;
+  player.hp = Math.max(0, player.hp - damage);
   return true;
 }
 
-function damagePlayerAtPoint(x, y){
-  const localPoint = playerWorldToLocal(x, y);
-  for(const plate of player.armor){
-    if(plate.respawnTimer > 0) continue;
-    if(isPointInsidePolygon(localPoint.x, localPoint.y, getPlayerPlateShape(plate))) return damagePlayerPlate(plate);
-  }
-  return false;
-}
-
-function damagePlayerAtProjectile(bullet){
+function damagePlayerAtProjectile(bullet, damage = 10){
+  if(player.invuln > 0) return false;
   const start = playerWorldToLocal(bullet.previousX ?? bullet.x, bullet.previousY ?? bullet.y);
   const end = playerWorldToLocal(bullet.x, bullet.y);
   for(const plate of player.armor){
-    if(plate.respawnTimer > 0) continue;
     const polygon = getPlayerPlateShape(plate);
     const hit = bullet.isLaser
       ? laserTouchesPolygon(start, end, polygon, bullet.size / 2)
       : segmentTouchesPolygon(start, end, polygon);
-    if(hit) return damagePlayerPlate(plate);
+    if(hit) return damagePlayer(damage);
   }
   return false;
 }
@@ -1364,7 +1317,8 @@ function collidePlayerWithEnemies(){
   if(player.invuln > 0) return;
   for(const enemy of enemies){
     if(!isInRange(enemy, player, (enemy.collisionRadius ?? enemy.r) + 14)) continue;
-    damagePlayerAtPoint(enemy.x, enemy.y); player.invuln = 45;
+    damagePlayer(enemy.dmg ?? 10);
+    player.invuln = 45;
     spawnBurst(player.x, player.y, color(255,120,140), 10);
     break;
   }
@@ -1380,14 +1334,7 @@ function collidePlayerWithAsteroids(){
     if(distance >= collisionDistance) continue;
     const normalX = distance > 0 ? dx / distance : 1;
     const normalY = distance > 0 ? dy / distance : 0;
-    const contactPoints = [
-      [asteroid.x + normalX * asteroid.r, asteroid.y + normalY * asteroid.r],
-      [player.x - normalX * 8, player.y - normalY * 8],
-      [player.x, player.y],
-    ];
-    for(const [contactX, contactY] of contactPoints){
-      if(damagePlayerAtPoint(contactX, contactY)) break;
-    }
+    damagePlayer(10);
     const separation = collisionDistance - distance + 0.5;
     player.x += normalX * separation;
     player.y += normalY * separation;
@@ -1508,19 +1455,8 @@ export function updateHUD(){
   const cursorAmmoStack = document.getElementById('cursor-ammo-stack');
   if(cursorAmmoStack) cursorAmmoStack.classList.toggle('reloading', player.reloadTimer > 0);
   const hpRatio = player.maxHp ? constrain(player.hp / player.maxHp, 0, 1) : 0;
-  const healthCount = document.getElementById('health-count');
-  if(healthCount) healthCount.innerText = `${Math.ceil(player.hp)} / ${player.maxHp}`;
-  const healthFill = document.getElementById('health-fill');
-  if(healthFill){
-    healthFill.style.width = `${hpRatio * 100}%`;
-    healthFill.classList.toggle('critical', hpRatio < 0.3);
-  }
   const vignette = document.getElementById('damage-vignette');
   if(vignette) vignette.style.opacity = hpRatio >= 0.7 ? '0' : String(Math.min(0.6, (0.7 - hpRatio) / 0.7 * 0.6));
-  const critical = document.getElementById('hp-critical');
-  const criticalValue = document.getElementById('hp-critical-val');
-  if(critical) critical.style.display = hpRatio < 0.3 ? 'block' : 'none';
-  if(criticalValue) criticalValue.innerText = `${Math.ceil(player.hp)} / ${player.maxHp}`;
   const xpFill = document.querySelector('#xp-sliver > div'); if(xpFill) xpFill.style.width = (player.xp/player.xpNeeded*100)+'%';
   const wave = document.getElementById('wave-val'); if(wave) wave.innerText = Math.max(1, Math.floor(difficultyScale()));
   const scrapRun = document.getElementById('scrap-run-val'); if(scrapRun) scrapRun.innerText = run.scrapEarned;
@@ -1537,14 +1473,6 @@ export function updateHUD(){
     dashCountdown.innerText = player.dashCooldownTimer <= 0
       ? 'PRÊT'
       : `${Math.ceil(player.dashCooldownTimer / 60)}s`;
-  }
-  const boostGlyph = document.getElementById('boost-glyph');
-  if(boostGlyph){
-    const boostRatio = player.boostMax ? constrain(player.boost / player.boostMax, 0, 1) : 0;
-    boostGlyph.style.opacity = String(0.25 + boostRatio * 0.75);
-    boostGlyph.classList.toggle('ready', boostRatio >= 0.6);
-    const boostCount = document.getElementById('boost-count');
-    if(boostCount) boostCount.innerText = `${Math.round(boostRatio * 100)}%`;
   }
   const maxEnemies = getMaxEnemies();
   const enemyCount = document.getElementById('enemy-count'); if(enemyCount) enemyCount.innerText = enemies.length;

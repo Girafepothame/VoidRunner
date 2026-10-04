@@ -15,13 +15,7 @@ export class Player {
     this.baseMaxHp = 100; this.hp = 100; this.maxHp = 100;
     this.core = gameData.playerArmor.core;
     this.armorRotation = (gameData.playerArmor.rotationDegrees || 0) * Math.PI / 180;
-    this.armor = Object.entries(gameData.playerArmor.parts).map(([id, shape]) => ({
-      id,
-      shape,
-      hp: gameData.playerArmor.plateHp,
-      maxHp: gameData.playerArmor.plateHp,
-      respawnTimer: 0,
-    }));
+    this.armor = Object.entries(gameData.playerArmor.parts).map(([id, shape]) => ({ id, shape }));
     this.fireCooldown = 0; this.fireRate = profile.fireRate;
     this.magazineSize = 3; this.ammo = this.magazineSize;
     this.reloadDuration = 60; this.reloadTimer = 0;

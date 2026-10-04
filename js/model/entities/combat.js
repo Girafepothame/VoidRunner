@@ -1,5 +1,7 @@
 import { Bullet } from './projectile.js';
 
+const ASTEROID_ORBIT_APPROACH_DISTANCE = 110;
+
 export { Bullet };
 
 export class Enemy {
@@ -7,6 +9,8 @@ export class Enemy {
     Object.assign(this, params);
     this.parts = params.parts || (params.shape ? [params.shape] : []);
     this.collisionRadius = params.collisionRadius ?? this.r * 1.3;
+    this.flockX = this.x;
+    this.flockY = this.y;
     this.core = { x: 0, y: 0, radius: Math.max(2, this.r * 0.22) };
     const shapePoints = Array.isArray(this.parts) ? this.parts.flat() : Object.values(this.parts).flat();
     this.trailRearOffset = shapePoints.reduce(
@@ -20,6 +24,9 @@ export class Enemy {
     this.wanderAngle = params.wanderAngle ?? random(TWO_PI);
     this.wanderTimer = params.wanderTimer ?? random(45, 140);
     this.wanderTurn = params.wanderTurn ?? random(-0.025, 0.025);
+    this.orbitingAsteroid = null;
+    this.orbitDirection = random() < 0.5 ? -1 : 1;
+    this.orbitRadius = 0;
     this.behavior = params.behavior ?? 'chase';
     this.warmupDuration = params.warmupDuration ?? 0;
     this.dashDuration = params.dashDuration ?? 0;
@@ -46,7 +53,7 @@ export class Enemy {
     this.trailLifetime = 42;
     this.trailSpacing = 2;
   }
-  update(player, asteroids = []){
+  update(player, asteroids = [], enemies = []){
     if(this.type === 'boss'){
       this.updateBossAI(player);
       return;
@@ -74,9 +81,11 @@ export class Enemy {
         this.wanderTurn = random(-0.025, 0.025);
         this.wanderAngle += random(-0.7, 0.7);
       }
-      const direction = this.getAvoidanceDirection(
-        Math.cos(this.wanderAngle), Math.sin(this.wanderAngle), asteroids,
-      );
+      const asteroid = this.getNearbyAsteroid(asteroids);
+      const heading = asteroid
+        ? this.getAsteroidOrbitDirection(asteroid)
+        : { x: Math.cos(this.wanderAngle), y: Math.sin(this.wanderAngle) };
+      const direction = this.getAvoidanceDirection(heading.x, heading.y, asteroids, enemies);
       this.angle = atan2(direction.y, direction.x);
       this.x += direction.x * this.speed * 0.65;
       this.y += direction.y * this.speed * 0.65;
@@ -87,13 +96,55 @@ export class Enemy {
       this.updateCharge(dx, dy, d);
       return;
     }
-    const direction = this.getAvoidanceDirection(dx / d, dy / d, asteroids);
+    const direction = this.getAvoidanceDirection(dx / d, dy / d, asteroids, enemies);
     this.angle = atan2(direction.y, direction.x);
     const chaseSpeed = this.speed * 1.5;
     this.x += direction.x * chaseSpeed; this.y += direction.y * chaseSpeed;
     this.updateTrail();
   }
-  getAvoidanceDirection(directionX, directionY, asteroids){
+  getNearbyAsteroid(asteroids){
+    if(this.orbitingAsteroid && asteroids.includes(this.orbitingAsteroid)){
+      const distance = Math.hypot(this.x - this.orbitingAsteroid.x, this.y - this.orbitingAsteroid.y);
+      const orbitRange = this.orbitingAsteroid.r + this.collisionRadius + ASTEROID_ORBIT_APPROACH_DISTANCE + 60;
+      if(distance <= orbitRange) return this.orbitingAsteroid;
+    }
+    this.orbitingAsteroid = null;
+    let nearestAsteroid = null;
+    let nearestDistance = Infinity;
+    for(const asteroid of asteroids){
+      const distance = Math.hypot(this.x - asteroid.x, this.y - asteroid.y);
+      const approachRange = asteroid.r + this.collisionRadius + ASTEROID_ORBIT_APPROACH_DISTANCE;
+      if(distance <= approachRange && distance < nearestDistance){
+        nearestAsteroid = asteroid;
+        nearestDistance = distance;
+      }
+    }
+    if(nearestAsteroid){
+      this.orbitingAsteroid = nearestAsteroid;
+      this.orbitDirection = random() < 0.5 ? -1 : 1;
+      this.orbitRadius = nearestAsteroid.r + this.collisionRadius + random(22, 48);
+    }
+    return nearestAsteroid;
+  }
+  getAsteroidOrbitDirection(asteroid){
+    const offsetX = this.x - asteroid.x;
+    const offsetY = this.y - asteroid.y;
+    const distance = Math.hypot(offsetX, offsetY);
+    const radialX = distance > 0 ? offsetX / distance : Math.cos(this.wanderAngle);
+    const radialY = distance > 0 ? offsetY / distance : Math.sin(this.wanderAngle);
+    const tangentX = -radialY * this.orbitDirection;
+    const tangentY = radialX * this.orbitDirection;
+    const clearance = asteroid.r + this.collisionRadius + 8;
+    const radialStrength = distance < clearance
+      ? 3
+      : Math.max(-1.25, Math.min(1.25, (this.orbitRadius - distance) / this.orbitRadius));
+    const tangentStrength = distance < clearance ? 0.35 : 1;
+    const directionX = radialX * radialStrength + tangentX * tangentStrength;
+    const directionY = radialY * radialStrength + tangentY * tangentStrength;
+    const length = Math.hypot(directionX, directionY) || 1;
+    return { x: directionX / length, y: directionY / length };
+  }
+  getAvoidanceDirection(directionX, directionY, asteroids, enemies){
     let steeringX = directionX;
     let steeringY = directionY;
     for(const asteroid of asteroids){
@@ -116,6 +167,20 @@ export class Enemy {
       const distance = Math.hypot(offsetX, offsetY) || 1;
       steeringX -= offsetX / distance * force * 0.55;
       steeringY -= offsetY / distance * force * 0.55;
+    }
+    for(const enemy of enemies){
+      if(enemy === this) continue;
+      const offsetX = this.x - enemy.flockX;
+      const offsetY = this.y - enemy.flockY;
+      const distance = Math.hypot(offsetX, offsetY);
+      const separationDistance = this.collisionRadius + (enemy.collisionRadius ?? enemy.r) + 12;
+      if(distance >= separationDistance) continue;
+      const separationStrength = 2 * (1 - distance / separationDistance);
+      const separationAngle = distance > 0
+        ? Math.atan2(offsetY, offsetX)
+        : enemies.indexOf(this) * 2.399963229728653;
+      steeringX += Math.cos(separationAngle) * separationStrength;
+      steeringY += Math.sin(separationAngle) * separationStrength;
     }
     const length = Math.hypot(steeringX, steeringY) || 1;
     return { x: steeringX / length, y: steeringY / length };
