@@ -27,8 +27,35 @@ export class Particle {
   draw(){ const c = this.col; fill(red(c), green(c), blue(c), map(this.life,0,50,0,255)); circle(this.x, this.y, 3); }
 }
 
+let shockwaveFrames = [];
+
+export function setShockwaveFrames(frames){
+  shockwaveFrames = frames;
+}
+
 export class Shockwave {
-  constructor(x,y,radius=42){ this.x=x; this.y=y; this.radius=4; this.maxRadius=radius; this.life=14; this.maxLife=14; }
+  constructor(x,y,radius=42){ this.x=x; this.y=y; this.radius=4; this.maxRadius=radius; this.life=36; this.maxLife=36; }
   update(){ this.radius += (this.maxRadius-this.radius) * 0.32; this.life--; }
-  draw(){ const alpha = map(this.life,0,this.maxLife,0,190); noFill(); stroke(255,184,79,alpha); strokeWeight(2); circle(this.x, this.y, this.radius*2); }
+  draw(){
+    if(shockwaveFrames.length){
+      const progress = constrain((this.maxLife - this.life) / (this.maxLife - 1), 0, 1);
+      const framePosition = progress * (shockwaveFrames.length - 1);
+      const frameIndex = Math.floor(framePosition);
+      const nextFrameIndex = Math.min(frameIndex + 1, shockwaveFrames.length - 1);
+      const blend = framePosition - frameIndex;
+      const diameter = this.maxRadius * 2;
+      push();
+      imageMode(CENTER);
+      tint(255, 255 * (1 - blend));
+      image(shockwaveFrames[frameIndex], this.x, this.y, diameter, diameter);
+      if(blend > 0){
+        tint(255, 255 * blend);
+        image(shockwaveFrames[nextFrameIndex], this.x, this.y, diameter, diameter);
+      }
+      pop();
+      return;
+    }
+    const alpha = map(this.life,0,this.maxLife,0,190);
+    noFill(); stroke(255,184,79,alpha); strokeWeight(2); circle(this.x, this.y, this.radius*2);
+  }
 }

@@ -3,8 +3,7 @@ import { Bullet } from './model/entities/projectile.js';
 import { Enemy } from './model/entities/combat.js';
 import { Asteroid } from './model/entities/world.js';
 import { Orb, ScrapPickup } from './model/entities/pickups.js';
-import { Turret, Drone, Orbital } from './model/entities/support.js';
-import { Particle, Shockwave, HyperPortal } from './model/entities/effects.js';
+import { Particle, Shockwave } from './model/entities/effects.js';
 import { EXPLOSION_SUB_DEFS, LEVEL_UP_DEFS, meta } from './meta.js';
 import { showScreen, flashWaveBanner } from './ui.js';
 import { chunkManager, CHUNK_SIZE } from './chunks.js';
@@ -14,26 +13,17 @@ import gameData from './data/game.json' with { type: 'json' };
 export let gameState = 'menu'; // menu, playing, paused, levelup, gameover, shop
 export let shopReturnState = 'menu';
 export let player, run;
-export let bullets = [], enemyBullets = [], enemies = [], asteroids = [], xpOrbs = [], scrapPickups = [], equipmentPickups = [], shockwaves = [], lightningArcs = [];
-export let drones = [], orbitals = [], turrets = [];
+export let bullets = [], enemyBullets = [], enemies = [], asteroids = [], xpOrbs = [], scrapPickups = [], shockwaves = [], lightningArcs = [];
 const BIOMES = gameData.biomes;
-const PORTAL_CONFIG = gameData.portal;
 const ENEMY_DEFS = gameData.enemies;
 const DANGER_CONFIG = gameData.danger;
-const FIRST_PORTAL_SCORE = PORTAL_CONFIG.firstScore;
-export let hyperPortal = null;
 export let keys = {};
 export let waveBannerTimer = 0;
 export let currentCards = [];
 const PLAYER_SCALE = 0.65;
 const PLAYER_TRAIL_LIFETIME = 42;
+const PLAYER_WING_TRAIL_LIFETIME = PLAYER_TRAIL_LIFETIME * 0.25;
 const PLAYER_TRAIL_SPACING = 2;
-export let inventoryOpen = false;
-// NOTE: WORLD_W / WORLD_H ne servent plus à borner le monde (celui-ci est
-// désormais infini, généré par chunks). Conservés uniquement si d'autres
-// fichiers (ex: ui.js, minimap) s'y réfèrent encore — vérifie ces usages.
-export let WORLD_W = 24000;
-export let WORLD_H = 16000;
 export let camX = 0, camY = 0;
 let aimAssistTarget = null;
 let aimLockTarget = null;
@@ -98,59 +88,115 @@ export function drawEnemies(){
 }
 
 function updatePlayerTrail(pl, shipRotation){
-  const points = pl.trailPoints;
-  for(const point of points) point.age++;
-  while(points.length && points[0].age >= PLAYER_TRAIL_LIFETIME) points.shift();
-
-  const rearOffset = 31.5 * PLAYER_SCALE;
-  const exhaustX = pl.x - Math.sin(shipRotation) * rearOffset;
-  const exhaustY = pl.y + Math.cos(shipRotation) * rearOffset;
-  const lastPoint = points[points.length - 1];
-  const isMoving = pl.dashTimer > 0 || Math.hypot(pl.vx, pl.vy) > 0.2;
-  if(!lastPoint && !isMoving) return;
-  if(!lastPoint || Math.hypot(exhaustX - lastPoint.x, exhaustY - lastPoint.y) >= PLAYER_TRAIL_SPACING){
-    points.push({ x: exhaustX, y: exhaustY, age: 0 });
+  for(const point of pl.trailPoints) point.age++;
+  while(pl.trailPoints.length && pl.trailPoints[0].age >= PLAYER_TRAIL_LIFETIME){
+    pl.trailPoints.shift();
   }
+  for(const points of pl.wingTrailPoints){
+    for(const point of points) point.age++;
+    while(points.length && points[0].age >= PLAYER_WING_TRAIL_LIFETIME) points.shift();
+  }
+
+  const forwardX = Math.cos(pl.angle), forwardY = Math.sin(pl.angle);
+  const movementX = pl.dashTimer > 0 ? Math.cos(pl.dashAngle) : pl.vx;
+  const movementY = pl.dashTimer > 0 ? Math.sin(pl.dashAngle) : pl.vy;
+  const forwardSpeed = movementX * forwardX + movementY * forwardY;
+  const isReversing = forwardSpeed < -0.2;
+  const isMoving = pl.dashTimer > 0 || Math.hypot(pl.vx, pl.vy) > 0.2;
+
+  if(isReversing){
+    pl.trailPoints.length = 0;
+  } else if(isMoving){
+    const rearOffset = 31.5 * PLAYER_SCALE;
+    const exhaustX = pl.x - Math.sin(shipRotation) * rearOffset;
+    const exhaustY = pl.y + Math.cos(shipRotation) * rearOffset;
+    const lastPoint = pl.trailPoints[pl.trailPoints.length - 1];
+    if(!lastPoint || Math.hypot(exhaustX - lastPoint.x, exhaustY - lastPoint.y) >= PLAYER_TRAIL_SPACING){
+      pl.trailPoints.push({ x: exhaustX, y: exhaustY, age: 0 });
+    }
+  }
+
+  const showWingTrails = pl.boosting || isReversing;
+  if(showWingTrails && isMoving){
+    const cos = Math.cos(shipRotation), sin = Math.sin(shipRotation);
+    for(let i = 0; i < pl.wingTrailPoints.length; i++){
+      const localX = (i === 0 ? -12 : 12) * PLAYER_SCALE;
+      const localY = 23 * PLAYER_SCALE;
+      const exhaustX = pl.x + localX * cos - localY * sin;
+      const exhaustY = pl.y + localX * sin + localY * cos;
+      const points = pl.wingTrailPoints[i];
+      const lastPoint = points[points.length - 1];
+      if(!lastPoint || Math.hypot(exhaustX - lastPoint.x, exhaustY - lastPoint.y) >= PLAYER_TRAIL_SPACING){
+        points.push({ x: exhaustX, y: exhaustY, age: 0 });
+      }
+    }
+  } else {
+    for(const points of pl.wingTrailPoints) points.length = 0;
+  }
+
+  return { showWingTrails };
 }
 
-function drawPlayerTrail(pl){
-  const points = pl.trailPoints;
+function drawPlayerTrail(pl, points, lineWidth, wingSide = 0, shipRotation = 0){
   if(points.length < 2) return;
 
-  push(); noFill(); strokeCap(ROUND); strokeJoin(ROUND);
-  for(let i=0;i<points.length-1;i++){
-    const start = points[i], end = points[i+1];
-    const fade = constrain(1 - Math.max(start.age, end.age) / PLAYER_TRAIL_LIFETIME, 0, 1);
-    if(fade <= 0) continue;
-    const previous = points[Math.max(0, i-1)];
-    const next = points[Math.min(points.length-1, i+2)];
-    const flicker = 0.94 + Math.sin(frameCount * 0.73 - i * 0.61) * 0.07 + Math.sin(frameCount * 1.17 + i * 0.37) * 0.035;
-
-    stroke(57, 255, 220, fade * 45 * flicker); strokeWeight((4.5 + fade * 5.4) * flicker);
-    beginShape();
-    curveVertex(previous.x, previous.y); curveVertex(start.x, start.y);
-    curveVertex(end.x, end.y); curveVertex(next.x, next.y);
-    endShape();
-
-    stroke(210, 255, 245, fade * 190 * flicker); strokeWeight((1.1 + fade * 2.9) * flicker);
-    beginShape();
-    curveVertex(previous.x, previous.y); curveVertex(start.x, start.y);
-    curveVertex(end.x, end.y); curveVertex(next.x, next.y);
-    endShape();
+  const last = points[points.length - 1];
+  const transformedPoints = wingSide === 0 ? points : points.map(point => {
+    const dx = point.x - last.x, dy = point.y - last.y;
+    const localX = dx * Math.cos(shipRotation) + dy * Math.sin(shipRotation);
+    const localY = -dx * Math.sin(shipRotation) + dy * Math.cos(shipRotation);
+    const angle = -wingSide * Math.PI / 4;
+    const rotatedX = localX * Math.cos(angle) - localY * Math.sin(angle);
+    const rotatedY = localX * Math.sin(angle) + localY * Math.cos(angle);
+    return {
+      x: last.x + rotatedX * Math.cos(shipRotation) - rotatedY * Math.sin(shipRotation),
+      y: last.y + rotatedX * Math.sin(shipRotation) + rotatedY * Math.cos(shipRotation),
+    };
+  });
+  const trailStart = transformedPoints[0], trailEnd = transformedPoints[transformedPoints.length - 1];
+  const context = drawingContext;
+  context.save();
+  const gradient = context.createLinearGradient(trailStart.x, trailStart.y, trailEnd.x, trailEnd.y);
+  gradient.addColorStop(0, 'rgba(255,255,255,0)');
+  gradient.addColorStop(1, 'rgba(255,255,255,1)');
+  context.strokeStyle = gradient;
+  context.lineWidth = lineWidth;
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.beginPath();
+  context.moveTo(trailStart.x, trailStart.y);
+  for(let i=0;i<transformedPoints.length-1;i++){
+    const previous = transformedPoints[Math.max(0, i-1)];
+    const start = transformedPoints[i], end = transformedPoints[i+1];
+    const next = transformedPoints[Math.min(transformedPoints.length-1, i+2)];
+    context.bezierCurveTo(
+      start.x + (end.x - previous.x) / 6,
+      start.y + (end.y - previous.y) / 6,
+      end.x - (next.x - start.x) / 6,
+      end.y - (next.y - start.y) / 6,
+      end.x,
+      end.y,
+    );
   }
-  pop();
+  context.stroke();
+  context.restore();
 }
 
 export function drawPlayerShip(){
   const pl = player; if(!pl) return;
   const profile = pl.profile;
   const shipRotation = pl.angle + pl.armorRotation;
-  updatePlayerTrail(pl, shipRotation);
-  drawPlayerTrail(pl);
+  const { showWingTrails } = updatePlayerTrail(pl, shipRotation);
+  drawPlayerTrail(pl, pl.trailPoints, 4.5);
+  if(showWingTrails){
+    for(let i = 0; i < pl.wingTrailPoints.length; i++){
+      drawPlayerTrail(pl, pl.wingTrailPoints[i], 2.2, i === 0 ? -1 : 1, shipRotation);
+    }
+  }
   push(); translate(pl.x, pl.y); rotate(shipRotation);
   const flicker = pl.invuln>0 && frameCount%10<5;
-  stroke(255, 255, 255, 220); strokeWeight(1);
-  fill(flicker ? color(255,150,0,150) : color(profile.color[0],profile.color[1],profile.color[2],220));
+  const shipColor = flicker ? color(255,150,0) : color(profile.color[0],profile.color[1],profile.color[2]);
+  stroke(shipColor); strokeWeight(1); fill(shipColor);
   for(const plate of pl.armor){
     if(plate.respawnTimer > 0) continue;
     beginShape(); getPlayerPlateShape(plate, true).forEach(([x,y]) => vertex(x,y)); endShape(CLOSE);
@@ -172,24 +218,18 @@ export function startRun(profileId='standard'){
   player = makePlayer(profileId);
   run = {
     time:0, kills:0, score:0, scrapEarned:0, spawnTimer:1,
-    biome:0, nextPortalScore:FIRST_PORTAL_SCORE,
-    portalBoss:null, portalEvent:'hidden', portalTimer:0,
+    biome:0,
   };
-  bullets=[]; enemyBullets=[]; enemies=[]; asteroids=[]; xpOrbs=[]; scrapPickups=[]; equipmentPickups=[]; shockwaves=[]; lightningArcs=[];
+  bullets=[]; enemyBullets=[]; enemies=[]; asteroids=[]; xpOrbs=[]; scrapPickups=[]; shockwaves=[]; lightningArcs=[];
   aimAssistTarget = null;
   aimLockTarget = null;
   aimChargeTarget = null;
   aimLockCharge = 0;
   rightMouseDown = false;
   fireButtonDown = false;
-  inventoryOpen = false;
-  hyperPortal = null;
   for(const p of particles) p.active = false;
   particleCursor = 0;
   chunkManager.reset(); // repart d'un monde vierge à chaque nouvelle run
-  drones = Array.from({ length: player.droneCount }, (_, i) => new Drone(i * TWO_PI / Math.max(1, player.droneCount)));
-  orbitals = Array.from({ length: player.orbitalCount }, (_, i) => new Orbital(i * TWO_PI / Math.max(1, player.orbitalCount)));
-  turrets = createTurrets();
   lastThreatTier = 0;
   run.spawnTimer = computeSpawnInterval();
   gameState = 'playing';
@@ -198,7 +238,6 @@ export function startRun(profileId='standard'){
 }
 
 export function endRun(){
-  if(inventoryOpen) toggleInventory();
   gameState = 'gameover';
   const earned = run.scrapEarned;
   run.scrapEarned = earned;
@@ -215,7 +254,6 @@ export function updateRun(){
   updateSpawning();
   updateThreatTier();
   updateWorld();
-  updateHyperPortal();
   handlePlayerDefeat();
 }
 
@@ -223,35 +261,22 @@ export function updatePlayer(){
   const dashKeyDown = typeof keyIsDown === 'function' && keyIsDown(32);
   if(dashKeyDown && !dashKeyWasDown) requestPlayerDash();
   dashKeyWasDown = dashKeyDown;
+  const previousX = player.x;
+  const previousY = player.y;
   updateCameraAndAim();
   updateMovement();
+  if(player.dashTimer <= 0){
+    camX += player.x - previousX;
+    camY += player.y - previousY;
+  }
   updatePlayerResources();
   handlePlayerWeapons();
 }
 
 function updateWorld(){
   updateChunks();
-  updateEnemies(); updateAsteroids(); updateDrones();
-  updateOrbitals(); updateTurrets(); updateBullets(); updateEnemyBullets(); updateOrbs();
+  updateEnemies(); updateAsteroids(); updateBullets(); updateEnemyBullets(); updateOrbs();
   updateParticles(); updateShockwaves(); checkCollisions();
-}
-
-function updateHyperPortal(){
-  return;
-}
-
-function activatePortalEvent(){
-  run.portalEvent = 'hidden';
-  run.portalTimer = 0;
-  hyperPortal = null;
-}
-
-function spawnPortalBoss(){
-  return;
-}
-
-function completePortalBoss(){
-  return;
 }
 
 // Charge/décharge les chunks autour du joueur et synchronise leurs entités
@@ -331,7 +356,22 @@ function updateCameraAndAim(){
   let delta = targetAngle - player.angle;
   while(delta > PI) delta -= TWO_PI;
   while(delta < -PI) delta += TWO_PI;
-  player.angle += constrain(delta, -0.22, 0.22);
+  const speedRatio = constrain(Math.hypot(player.vx, player.vy) / (player.speed * 2.25), 0, 1);
+  const maxTurnRate = 0.22 - speedRatio * 0.165;
+  const turnAcceleration = 0.035 * (1 - speedRatio * 0.65);
+  const brakingRate = Math.sqrt(2 * turnAcceleration * Math.abs(delta));
+  const targetTurnVelocity = Math.sign(delta) * Math.min(maxTurnRate, brakingRate);
+  player.turnVelocity += constrain(
+    targetTurnVelocity - player.turnVelocity,
+    -turnAcceleration,
+    turnAcceleration,
+  );
+  if(Math.abs(delta) <= Math.abs(player.turnVelocity) && delta * player.turnVelocity >= 0){
+    player.angle += delta;
+    player.turnVelocity = 0;
+  } else {
+    player.angle += player.turnVelocity;
+  }
 }
 
 function findAimAssistTarget(){
@@ -348,13 +388,6 @@ function findAimAssistTarget(){
     if(score < bestScore){ bestScore = score; bestTarget = enemy; }
   }
   return bestTarget;
-}
-
-function blendAimAngle(firstAngle, secondAngle, amount){
-  let delta = secondAngle - firstAngle;
-  while(delta > PI) delta -= TWO_PI;
-  while(delta < -PI) delta += TWO_PI;
-  return firstAngle + delta * amount;
 }
 
 // Micro screen-shake (dash, impacts...) : décale légèrement la caméra
@@ -378,6 +411,7 @@ function applyShake(){
 function updateMovement(){
   updateDash();
   if(player.dashTimer > 0){
+    player.boosting = false;
     updateAimOpening();
     return; // l'impulsion de dash prend le pas sur le déplacement normal
   }
@@ -394,6 +428,7 @@ function applyDirectionalMovement(){
   const forward = (keys['z'] ? 1 : 0) - (keys['s'] ? 1 : 0);
   const strafe = (keys['d'] ? 1 : 0) - (keys['q'] ? 1 : 0);
   const boosting = keys['shift'] && player.boost > 0 && (forward !== 0 || strafe !== 0);
+  player.boosting = boosting;
   const boostHeldWhileMoving = keys['shift'] && (forward !== 0 || strafe !== 0);
   player.boost = boosting
     ? Math.max(0, player.boost - 1.8)
@@ -440,7 +475,7 @@ const DASH_DURATION_FRAMES = 4; // déplacement quasi instantané (~0.07s)
 let dashGrazedEnemies = new Set();
 
 export function requestPlayerDash(){
-  if(gameState !== 'playing' || inventoryOpen || !player) return;
+  if(gameState !== 'playing' || !player) return;
   const activeDirection = ['z', 's', 'q', 'd'].find(direction => keys[direction]);
   requestDash(activeDirection || player.lastMoveDirection || 'z');
 }
@@ -554,7 +589,7 @@ export function setRightMouseDown(isDown){
 }
 
 export function requestPlayerReload(){
-  if(gameState !== 'playing' || inventoryOpen || !player || player.reloadTimer > 0 || player.ammo >= player.magazineSize) return false;
+  if(gameState !== 'playing' || !player || player.reloadTimer > 0 || player.ammo >= player.magazineSize) return false;
   player.reloadTimer = player.reloadDuration;
   return true;
 }
@@ -604,40 +639,6 @@ export function triggerChainLightning(source){
   lightningArcs.push({ source, target, life: 8, maxLife: 8 });
 }
 
-export function updateDrones(){
-  for(const drone of drones) drone.update(player, enemies, bullets);
-}
-// Le système d’équipement est retiré : les tourelles latérales ne sont plus
-// construites à partir d’un loadout. Elles restent bloquées au mode vide.
-function createTurrets(){
-  return [];
-}
-
-export function refreshTurrets(){
-  turrets = createTurrets();
-}
-function updateTurrets(){
-  const targetX = mouseX + camX;
-  const targetY = mouseY + camY;
-  for(const turret of turrets) turret.update(player, targetX, targetY, bullets);
-}
-
-// Les objets et l'inventaire sont retirés du jeu ; les améliorations ne
-// viennent plus que des niveaux. Les fonctions d'équipement restent neutralisées.
-export function equipFromInventory(){ return false; }
-export function unequipItem(){ return false; }
-export function toggleInventory(){ return false; }
-export function debugAddEquipment(){ return null; }
-export function debugUnlockSlot(){ return false; }
-export function updateOrbitals(){
-  for(const orbital of orbitals){
-    orbital.update(player);
-    for(const enemy of enemies){
-      if(isInRange(orbital, enemy, enemy.r + 7)) damageEnemy(enemy, player.orbitalDamage/60);
-    }
-  }
-}
-
 // --- Danger continu : distance à l'origine + temps de survie -------------
 // Option "hybride" façon Risk of Rain : là où RoR fait grimper le danger
 // uniquement avec le temps (tout le stage devient plus dur pendant que vous
@@ -678,8 +679,6 @@ function computeSpawnInterval(){
 }
 
 export function updateSpawning(){
-  if(run.portalEvent === 'cleanup' || run.portalEvent === 'ready') return;
-  maybeSpawnMiniboss();
   if(enemies.length >= getMaxEnemies()){
     run.spawnTimer = Math.min(run.spawnTimer, 20);
     return;
@@ -705,8 +704,7 @@ function updateThreatTier(){
 }
 
 export function spawnAsteroid(){
-  // Monde infini : les positions de spawn sont relatives au joueur uniquement,
-  // plus besoin de les clamper dans WORLD_W/WORLD_H.
+  // Monde infini : les positions de spawn sont relatives au joueur.
   const edge = floor(random(4)); let x, y;
   const margin = 80;
   if(edge===0){ x=player.x + random(-width/2, width/2); y=player.y-height/2-margin; }
@@ -729,42 +727,47 @@ export function spawnEnemy(){
   else if(edge===2){ x=player.x + random(-width/2,width/2); y=player.y+height/2+margin; }
   else { x=player.x-width/2-margin; y=player.y+random(-height/2,height/2); }
   const scale = difficultyScale();
-  const type = 'chaser';
+  const roll = random();
+  const type = roll < 0.2 ? 'charger' : roll < 0.35 ? 'bombardier' : 'fighter';
   const base = ENEMY_DEFS[type];
   const speedMult = 1 + (scale - 1) * 0.04;
   const desiredSpeed = base.speed * speedMult;
   const maxAllowed = (player && player.speed) ? player.speed * 0.75 : desiredSpeed;
   const finalSpeed = Math.min(desiredSpeed, maxAllowed);
+  const dashSpeed = base.dashSpeed
+    ? Math.min(base.dashSpeed * speedMult, player.speed * 2.5)
+    : finalSpeed;
   enemies.push(new Enemy({
     x, y, type,
     hp: Math.max(1, base.hp * scale),
     maxHp: Math.max(1, base.hp * scale),
     speed: finalSpeed,
     r: base.radius,
+    collisionRadius: base.collisionRadius,
     dmg: base.damage,
     xp: base.xp,
     color: base.color,
     score: base.score,
     aggroRange: base.aggroRange,
+    behavior: base.behavior,
+    warmupDuration: base.warmupDuration,
+    dashDuration: base.dashDuration,
+    recoveryDuration: base.recoveryDuration,
+    burstDuration: base.burstDuration,
+    dashSpeed,
     parts: base.parts || [],
-    fireCooldown: random(60,120),
-    phase: random(TWO_PI),
     angle: 0,
   }));
 }
 
 export function updateEnemies(){
   for(const e of enemies){
-    e.update(player, run, enemyBullets);
+    e.update(player, asteroids);
   }
 }
 
 // Les mini-boss sont retirés pour le moment : le jeu ne garde que la base
 // ennemie simple et lisible, sans variations ni boss de phase.
-function maybeSpawnMiniboss(){ return; }
-
-function dropEquipment(){ return null; }
-
 export function updateAsteroids(){
   for(let i=asteroids.length-1;i>=0;i--){
     const asteroid = asteroids[i];
@@ -791,6 +794,51 @@ export function updateBullets(){
   }
 }
 
+function spawnBossLaser(enemy){
+  enemy.bossLaserChargeFrames = 120;
+}
+
+function fireBossLaser(enemy, playerRef = player){
+  const playerOffsetX = playerRef.x - enemy.x, playerOffsetY = playerRef.y - enemy.y;
+  if(playerOffsetX * playerOffsetX + playerOffsetY * playerOffsetY > enemy.aggroRange * enemy.aggroRange) return;
+  const angle = enemy.angle;
+  const originX = enemy.x + Math.cos(angle) * 104;
+  const originY = enemy.y + Math.sin(angle) * 104;
+  const range = Math.max(0, enemy.aggroRange - 104);
+  const targetX = originX + Math.cos(angle) * range;
+  const targetY = originY + Math.sin(angle) * range;
+  enemyBullets.push({
+    isLaser: true,
+    x: targetX,
+    y: targetY,
+    previousX: originX,
+    previousY: originY,
+    originX,
+    originY,
+    targetX,
+    targetY,
+    activeFrames: 12,
+    elapsed: 0,
+    size: 50,
+    hasHit: false,
+    draw(){
+      const alpha = map(this.elapsed, 0, this.activeFrames, 255, 100);
+      push(); strokeCap(ROUND);
+      stroke(255, 190, 230, alpha); strokeWeight(this.size);
+      line(this.originX, this.originY, this.targetX, this.targetY);
+      stroke(255, 45, 150, alpha); strokeWeight(this.size * 0.86);
+      line(this.originX, this.originY, this.targetX, this.targetY);
+      pop();
+    },
+    update(){
+      this.elapsed++;
+      this.exploded = this.elapsed > this.activeFrames;
+      this.previousX = this.originX;
+      this.previousY = this.originY;
+    },
+  });
+}
+
 // Distance au carré : évite un Math.hypot/sqrt à chaque appel. Ces checks de
 // portée tournent des centaines de fois par frame (orbes, orbitaux, tourelles,
 // collisions joueur/ennemis...) donc c'est un des points chauds du jeu.
@@ -813,6 +861,15 @@ export function updateEnemyBullets(){
   for(let i=enemyBullets.length-1;i>=0;i--){
     const bullet = enemyBullets[i];
     bullet.update();
+    if(bullet.exploded){ enemyBullets.splice(i, 1); continue; }
+    if(bullet.isLaser){
+      if(!bullet.hasHit && damagePlayerAtProjectile(bullet)){
+        bullet.hasHit = true;
+        player.invuln = 8;
+        spawnBurst(player.x, player.y, color(255, 120, 180), 12);
+      }
+      continue;
+    }
     if(isOutsideScreen(bullet, 40)){ enemyBullets.splice(i, 1); continue; }
     if(!isInRange(bullet, player, bullet.size + 32)) continue;
     damagePlayerWithBullet(bullet, i);
@@ -832,7 +889,18 @@ function damagePlayerWithBullet(bullet, index){
   spawnBurst(bullet.x, bullet.y, color(255,120,140), 8);
 }
 
-export function drawBullets(){ noStroke(); for(const b of bullets) b.draw(); for(const b of enemyBullets){ fill(255,110,140); circle(b.x,b.y,b.size); } }
+export function drawBullets(){
+  noStroke();
+  for(const b of bullets) b.draw();
+  for(const b of enemyBullets){
+    if(b.isLaser){
+      if(typeof b.draw === 'function'){ b.draw(); }
+      continue;
+    }
+    if(typeof b.draw === 'function'){ b.draw(); continue; }
+    fill(255,110,140); circle(b.x,b.y,b.size);
+  }
+}
 
 export function spawnPickupsFrom(e){
   const strength = getEnemyStrength(e);
@@ -900,12 +968,6 @@ export function gainXp(n){
 
 function triggerLevelUp(){
   gameState = 'levelup';
-  const stats = document.getElementById('level-stats');
-  if(stats){
-    stats.innerHTML = `<div class="level-stats-title">NIVEAU ATTEINT</div><div class="level-stats-list"><div>Niveau <span>${player.level}</span></div></div>`;
-  }
-  const equipment = document.getElementById('level-equipment');
-  if(equipment){ equipment.innerHTML = ''; }
   const explosionActive = (player.upgradeCounts.explosive || 0) > 0;
   const explosionChoices = explosionActive ? EXPLOSION_SUB_DEFS : LEVEL_UP_DEFS.filter(upgrade => upgrade.id === 'explosive');
   const regularChoices = LEVEL_UP_DEFS.filter(upgrade => upgrade.id !== 'explosive');
@@ -986,7 +1048,6 @@ export function damageEnemy(e, damage){
     run.score += e.score; run.kills += 1;
     spawnBurst(e.x,e.y, color(e.color[0],e.color[1],e.color[2]), e.isMiniboss ? 34 : 16);
     spawnPickupsFrom(e);
-    if(e.isPortalBoss) run.portalBoss = null;
     if(player.dashTimer > 0) rechargeDashFull(); else rechargeDashPercent(0.2);
     enemies.splice(enemies.indexOf(e),1);
     return true;
@@ -1019,6 +1080,12 @@ export function explodeAt(x,y,damage,source){
     }
   }
   if(hit) spawnBurst(x, y, color(255,184,79), 10);
+}
+
+export function triggerShockwaveAnimation(){
+  if(gameState !== 'playing' || !player) return false;
+  shockwaves.push(new Shockwave(player.x, player.y, 90));
+  return true;
 }
 
 function ricochetFrom(b, target){
@@ -1109,6 +1176,7 @@ export function checkCollisions(){
     const bounced = enemyResult.bounced || asteroidResult.bounced;
     if(hit && bullet.pierce <= 0 && !bounced) bullets.splice(i, 1);
   }
+  collideEnemiesWithAsteroids();
   collidePlayerWithEnemies();
   collidePlayerWithAsteroids();
 }
@@ -1186,10 +1254,9 @@ function isBulletTouchingPlayerCore(bullet){
 
 function getPlayerPlateShape(plate, visual = false){
   const aimSpread = player.aimOpening * 10;
-  let centerX = 0, centerY = 0;
-  for(const [x, y] of plate.shape){ centerX += x; centerY += y; }
+  let centerX = 0;
+  for(const [x] of plate.shape) centerX += x;
   centerX /= plate.shape.length || 1;
-  centerY /= plate.shape.length || 1;
   const wingSide = plate.id === 'right-wing' ? 1 : plate.id === 'left-wing' ? -1 : 0;
   const recoil = visual && wingSide ? player.wingRecoil : 0;
   const offsetX = Math.sign(centerX) * aimSpread + wingSide * recoil * 5;
@@ -1232,7 +1299,11 @@ function damagePlayerAtProjectile(bullet){
   const end = playerWorldToLocal(bullet.x, bullet.y);
   for(const plate of player.armor){
     if(plate.respawnTimer > 0) continue;
-    if(segmentTouchesPolygon(start, end, getPlayerPlateShape(plate))) return damagePlayerPlate(plate);
+    const polygon = getPlayerPlateShape(plate);
+    const hit = bullet.isLaser
+      ? laserTouchesPolygon(start, end, polygon, bullet.size / 2)
+      : segmentTouchesPolygon(start, end, polygon);
+    if(hit) return damagePlayerPlate(plate);
   }
   return false;
 }
@@ -1264,6 +1335,27 @@ function segmentTouchesPolygon(start, end, polygon){
   return false;
 }
 
+function laserTouchesPolygon(start, end, polygon, radius){
+  if(segmentTouchesPolygon(start, end, polygon)) return true;
+  const radiusSquared = radius * radius;
+  const pointSegmentDistanceSquared = (point, segmentStart, segmentEnd) => {
+    const dx = segmentEnd.x - segmentStart.x, dy = segmentEnd.y - segmentStart.y;
+    const lengthSquared = dx * dx + dy * dy;
+    const projection = lengthSquared === 0 ? 0 : constrain(((point.x - segmentStart.x) * dx + (point.y - segmentStart.y) * dy) / lengthSquared, 0, 1);
+    const closestX = segmentStart.x + dx * projection;
+    const closestY = segmentStart.y + dy * projection;
+    return (point.x - closestX) ** 2 + (point.y - closestY) ** 2;
+  };
+  for(let i=0; i<polygon.length; i++){
+    const current = { x: polygon[i][0], y: polygon[i][1] };
+    const next = { x: polygon[(i + 1) % polygon.length][0], y: polygon[(i + 1) % polygon.length][1] };
+    if(pointSegmentDistanceSquared(current, start, end) <= radiusSquared
+      || pointSegmentDistanceSquared(start, current, next) <= radiusSquared
+      || pointSegmentDistanceSquared(end, current, next) <= radiusSquared) return true;
+  }
+  return false;
+}
+
 function wasRecentlyHit(bullet, target){
   return bullet.lastHit === target && bullet.ricochetCooldown > 0;
 }
@@ -1281,10 +1373,80 @@ function collidePlayerWithEnemies(){
 function collidePlayerWithAsteroids(){
   if(player.invuln > 0) return;
   for(const asteroid of asteroids){
-    if(!isInRange(asteroid, player, asteroid.r + 14)) continue;
-    damagePlayerAtPoint(asteroid.x, asteroid.y); player.invuln = 45;
+    const dx = player.x - asteroid.x;
+    const dy = player.y - asteroid.y;
+    const distance = Math.hypot(dx, dy);
+    const collisionDistance = asteroid.r + 14;
+    if(distance >= collisionDistance) continue;
+    const normalX = distance > 0 ? dx / distance : 1;
+    const normalY = distance > 0 ? dy / distance : 0;
+    const contactPoints = [
+      [asteroid.x + normalX * asteroid.r, asteroid.y + normalY * asteroid.r],
+      [player.x - normalX * 8, player.y - normalY * 8],
+      [player.x, player.y],
+    ];
+    for(const [contactX, contactY] of contactPoints){
+      if(damagePlayerAtPoint(contactX, contactY)) break;
+    }
+    const separation = collisionDistance - distance + 0.5;
+    player.x += normalX * separation;
+    player.y += normalY * separation;
+    const relativeVx = player.vx - (asteroid.vx ?? 0);
+    const relativeVy = player.vy - (asteroid.vy ?? 0);
+    const normalVelocity = relativeVx * normalX + relativeVy * normalY;
+    if(normalVelocity < 0){
+      const impulse = -normalVelocity * 1.8;
+      player.vx += normalX * impulse;
+      player.vy += normalY * impulse;
+    } else {
+      player.vx += normalX * 2.8;
+      player.vy += normalY * 2.8;
+    }
+    player.invuln = 45;
     spawnBurst(player.x, player.y, color(255,184,79), 10);
     break;
+  }
+}
+
+function collideEnemiesWithAsteroids(){
+  for(const enemy of enemies){
+    for(const asteroid of asteroids){
+      const dx = enemy.x - asteroid.x;
+      const dy = enemy.y - asteroid.y;
+      const distance = Math.hypot(dx, dy);
+      const collisionDistance = (enemy.collisionRadius ?? enemy.r) + asteroid.r;
+      if(distance >= collisionDistance) continue;
+
+      const normalX = distance > 0 ? dx / distance : Math.cos(enemy.angle || 0);
+      const normalY = distance > 0 ? dy / distance : Math.sin(enemy.angle || 0);
+      enemy.x += normalX * (collisionDistance - distance + 0.5);
+      enemy.y += normalY * (collisionDistance - distance + 0.5);
+      if(enemy.asteroidContactCooldown > 0) break;
+
+      enemy.asteroidContactCooldown = 24;
+      const charging = enemy.behavior === 'charger' && enemy.chargeState === 'dash';
+      const impactDamage = Math.max(1, Math.round(asteroid.r * (charging ? 0.18 : 0.1)));
+      const impactSpeed = charging
+        ? Math.hypot(enemy.chargeVelocityX, enemy.chargeVelocityY)
+        : enemy.speed * (enemy.aggroed ? 1.5 : 0.65);
+      damageEnemy(enemy, impactDamage);
+      if(!enemies.includes(enemy)) break;
+
+      if(charging){
+        const directionDot = enemy.dashDirectionX * normalX + enemy.dashDirectionY * normalY;
+        if(directionDot < 0){
+          enemy.dashDirectionX -= 2 * directionDot * normalX;
+          enemy.dashDirectionY -= 2 * directionDot * normalY;
+        }
+      }
+      enemy.angle = Math.atan2(normalY, normalX);
+      const reboundSpeed = Math.max(enemy.behavior === 'charger' ? 4 : 2.5, Math.min(impactSpeed * 0.8, 12));
+      enemy.bounceVelocityX = normalX * reboundSpeed;
+      enemy.bounceVelocityY = normalY * reboundSpeed;
+      enemy.bounceFrames = 8;
+      spawnBurst(enemy.x, enemy.y, color(enemy.color[0], enemy.color[1], enemy.color[2]), 8);
+      break;
+    }
   }
 }
 
@@ -1293,11 +1455,7 @@ export function drawEntities(){
   drawParticles();
   drawAsteroids();
   drawEnemies();
-  if(hyperPortal) hyperPortal.draw();
   drawBullets();
-  drawOrbitals();
-  drawDrones();
-  drawTurrets();
   drawPlayerShip();
 }
 
@@ -1313,31 +1471,6 @@ export function drawEnemyIndicators(){
     if(isVisible) continue;
     drawEnemyIndicator(screenX, screenY, centerX, centerY, edgePadding, enemy.color);
   }
-}
-
-export function drawPortalIndicator(){
-  if(!player || !hyperPortal) return;
-  const screenX = hyperPortal.x - camX;
-  const screenY = hyperPortal.y - camY;
-  if(screenX >= 0 && screenX <= width && screenY >= 0 && screenY <= height) return;
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const directionX = screenX - centerX;
-  const directionY = screenY - centerY;
-  const distance = Math.hypot(directionX, directionY) || 1;
-  const unitX = directionX / distance;
-  const unitY = directionY / distance;
-  const padding = 30;
-  const edgeDistance = Math.min(
-    (width / 2 - padding) / Math.max(Math.abs(unitX), 0.001),
-    (height / 2 - padding) / Math.max(Math.abs(unitY), 0.001),
-  );
-  const indicatorX = centerX + unitX * edgeDistance;
-  const indicatorY = centerY + unitY * edgeDistance;
-  push(); translate(indicatorX, indicatorY); rotate(Math.atan2(unitY, unitX));
-  noStroke(); fill(hyperPortal.color[0], hyperPortal.color[1], hyperPortal.color[2], 230);
-  triangle(14, 0, -9, 8, -9, -8);
-  pop();
 }
 
 function drawEnemyIndicator(targetX, targetY, centerX, centerY, padding, enemyColor){
@@ -1369,22 +1502,6 @@ function isVisibleOnScreen(entity, margin){
     && entity.y >= camY - margin && entity.y <= camY + height + margin;
 }
 
-function drawOrbitals(){
-  for(const orbital of orbitals) orbital.draw();
-}
-
-function drawDrones(){
-  if(drones.length){
-    noFill(); stroke(255,184,79,35); strokeWeight(1);
-    circle(player.x, player.y, 96);
-  }
-  for(const drone of drones) drone.draw();
-}
-
-function drawTurrets(){
-  for(const turret of turrets) turret.draw();
-}
-
 export function updateHUD(){
   const cursorAmmo = document.querySelectorAll('#cursor-ammo-stack i');
   cursorAmmo.forEach((round, index) => round.classList.toggle('loaded', index < player.ammo));
@@ -1409,18 +1526,6 @@ export function updateHUD(){
   const scrapRun = document.getElementById('scrap-run-val'); if(scrapRun) scrapRun.innerText = run.scrapEarned;
   const score = document.getElementById('score-val'); if(score) score.innerText = run.score;
   const biome = document.getElementById('biome-val'); if(biome) biome.innerText = BIOMES[run.biome % BIOMES.length].name;
-  const portal = document.getElementById('portal-val');
-  if(portal){
-    const portalStatus = {
-      found: 'ACTIVER',
-      active: `${Math.ceil(run.portalTimer / 60)}s`,
-      cleanup: 'NETTOYAGE',
-      ready: 'OUVERT',
-    }[run.portalEvent];
-    portal.innerText = portalStatus || `À ${run.nextPortalScore}`;
-    const portalStatusLine = document.getElementById('portal-status');
-    if(portalStatusLine) portalStatusLine.classList.toggle('actionable', run.portalEvent === 'found' || run.portalEvent === 'ready');
-  }
   const dashGlyph = document.getElementById('dash-glyph');
   if(dashGlyph){
     const ready = player.dashCooldownTimer <= 0;

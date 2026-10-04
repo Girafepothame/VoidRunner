@@ -75,5 +75,3 @@ export function flashWaveBanner(txt){
   }
   gameplay.setWaveBannerTimer(90);
 }
-
-export function buildInventoryUI(){ return; }

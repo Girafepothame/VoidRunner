@@ -1,3 +1,13 @@
 {
-    "liveServer.settings.port": 5501
+    "liveServer.settings.port": 5501,
+    "chat.tools.terminal.autoApprove": {
+        "/^file '/root/\\.vscode-server/data/agentSessionData/0946139e-8f7e-40e6-8e19-8bc5d3a02eb7/attachments/380edc4d-38cc-440e-a82a-0c81c098834c/Pasted Image\\.png' && python -c \"from PIL import Image; im=Image\\.open\\('/root/\\.vscode-server/data/agentSessionData/0946139e-8f7e-40e6-8e19-8bc5d3a02eb7/attachments/380edc4d-38cc-440e-a82a-0c81c098834c/Pasted Image\\.png'\\); print\\(im\\.size, im\\.mode\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python -m json\\.tool js/data/game\\.json > /dev/null$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
 }

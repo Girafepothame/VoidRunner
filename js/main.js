@@ -1,7 +1,9 @@
 // Main p5 glue: setup, draw and input handlers (module entry)
-import { gameState, updateRun, drawEntities, updateHUD, startRun } from './gameplay.js';
 import { renderMenuScrap, showScreen, openShop, closeShop, openDebugMenu, closeDebugMenu } from './ui.js';
 import * as gameplay from './gameplay.js';
+import { setShockwaveFrames } from './model/entities/effects.js';
+
+const SHOCKWAVE_FRAME_COUNT = 10;
 
 const starLayers = [
 	{ depth: 0.12, size: 1, alpha: 90, count: 90, stars: [] },
@@ -9,6 +11,7 @@ const starLayers = [
 	{ depth: 0.5, size: 2, alpha: 220, count: 38, stars: [] }
 ];
 let starSeed = 2408;
+let controlWasDown = false;
 
 function nextStarRandom(){
 	starSeed = (starSeed * 1664525 + 1013904223) >>> 0;
@@ -38,8 +41,8 @@ function drawStarfield(){
 function positionCursorAmmo(){
  const ammoStack = document.getElementById('cursor-ammo-stack');
  if(ammoStack) {
-	 ammoStack.style.left = `${Math.min(mouseX + 20, width - 26)}px`;
-	 ammoStack.style.top = `${Math.max(8, Math.min(mouseY - 8, height - 40))}px`;
+		 ammoStack.style.left = `${Math.min(mouseX + 20, width - 14)}px`;
+		 ammoStack.style.top = `${Math.max(8, Math.min(mouseY - 8, height - 32))}px`;
  }
 }
 
@@ -51,6 +54,14 @@ function _setup(){
 	pixelDensity(1);
 	const c = createCanvas(windowWidth, windowHeight); c.parent('game-container'); c.style('position','absolute'); c.style('top','0'); c.style('left','0'); c.style('z-index','0'); textFont('Consolas, Menlo, monospace'); createStarfield(); renderMenuScrap();
 }
+function _preload(){
+	const frames = Array.from({ length: SHOCKWAVE_FRAME_COUNT }, (_, index) => {
+		const frameName = `frame-${String(index + 1).padStart(2, '0')}.png`;
+		const path = `assets/spritesheets/explosion/frames/${frameName}`;
+		return loadImage(path, undefined, error => console.error(`Impossible de charger l'image ${path}`, error));
+	});
+	setShockwaveFrames(frames);
+}
 function _windowResized(){ resizeCanvas(windowWidth, windowHeight); }
 function _draw(){ background(6,9,18); drawStarfield();
 	// translate world camera
@@ -61,8 +72,8 @@ function _draw(){ background(6,9,18); drawStarfield();
 	}
 	else if(gameplay.gameState !== 'menu'){ gameplay.drawEntities(); }
 	pop();
-	if(gameplay.gameState === 'playing'){ gameplay.drawEnemyIndicators(); gameplay.drawPortalIndicator(); }
-	if(gameplay.gameState === 'playing' && !gameplay.inventoryOpen){ gameplay.drawCrosshair(); positionCursorAmmo(); noCursor(); }
+	if(gameplay.gameState === 'playing'){ gameplay.drawEnemyIndicators(); }
+	if(gameplay.gameState === 'playing'){ gameplay.drawCrosshair(); positionCursorAmmo(); noCursor(); }
 	else { cursor(); }
 	// HUD and overlays
 	if(gameplay.gameState === 'playing'){ gameplay.updateHUD(); }
@@ -90,6 +101,13 @@ function _mouseReleased(event){
 	return false;
 }
 function _keyPressed(){
+	if(keyCode === 17){
+		if(!controlWasDown){
+			controlWasDown = true;
+			gameplay.triggerShockwaveAnimation();
+		}
+		return false;
+	}
 	if(key === 'F12' || keyCode === 123){
 		return true;
 	}
@@ -98,11 +116,7 @@ function _keyPressed(){
 		else openDebugMenu();
 		return false;
 	}
-	if(key === 'i' || key === 'I'){
-		return false;
-	}
 	if(key === 'Escape'){
-		if(gameplay.inventoryOpen){ gameplay.toggleInventory(); return false; }
 		if(gameplay.gameState === 'playing') gameplay.pauseRun();
 		else if(gameplay.gameState === 'paused') gameplay.resumeRun();
 		return false;
@@ -113,11 +127,15 @@ function _keyPressed(){
 	if(typeof gameplay.keys !== 'undefined') gameplay.keys[lower] = true;
 	return false;
 }
-function _keyReleased(){ if(typeof gameplay.keys !== 'undefined') gameplay.keys[key.toLowerCase()] = false; return false; }
+function _keyReleased(){
+	if(keyCode === 17) controlWasDown = false;
+	if(typeof gameplay.keys !== 'undefined') gameplay.keys[key.toLowerCase()] = false;
+	return false;
+}
 // Wire p5 global callbacks to module functions
-window.setup = _setup; window.windowResized = _windowResized; window.draw = _draw;
+window.preload = _preload; window.setup = _setup; window.windowResized = _windowResized; window.draw = _draw;
 window.mousePressed = _mousePressed; window.mouseReleased = _mouseReleased; window.keyPressed = _keyPressed; window.keyReleased = _keyReleased;
-window.addEventListener('blur', () => { gameplay.setRightMouseDown(false); gameplay.setFireButtonDown(false); });
+window.addEventListener('blur', () => { gameplay.setRightMouseDown(false); gameplay.setFireButtonDown(false); controlWasDown = false; });
 window.addEventListener('contextmenu', event => event.preventDefault());
 
 // Expose startRun/openShop on window so buttons still work

@@ -3,7 +3,7 @@
 ## Model
 
 - `model/entities/` contient les classes du jeu, regroupees par domaine.
-- `meta.js`, `equipment.js`, `chunks.js` portent les donnees et regles independantes de l'interface.
+- `meta.js` et `chunks.js` portent les donnees et regles independantes de l'interface.
 - `data/game.json` contient la configuration statique.
 
 Les fichiers de domaine (`combat.js`, `pickups.js`, etc.) sont les sources uniques des classes. Il n'y a pas de doublon entre fichiers majuscules et minuscules.

@@ -4,12 +4,14 @@ import gameData from '../../data/game.json' with { type: 'json' };
 export class Player {
   constructor(x=0,y=0,profileId='standard'){
     this.x = x || width/2; this.y = y || height/2; this.angle = -HALF_PI;
+    this.turnVelocity = 0;
     const profile = SHIP_PROFILES[profileId] || SHIP_PROFILES.standard;
     this.profileId = SHIP_PROFILES[profileId] ? profileId : 'standard';
     this.profile = profile;
     this.baseSpeed = profile.speed; this.speed = profile.speed;
     this.vx = 0; this.vy = 0;
     this.trailPoints = [];
+    this.wingTrailPoints = [[], []];
     this.baseMaxHp = 100; this.hp = 100; this.maxHp = 100;
     this.core = gameData.playerArmor.core;
     this.armorRotation = (gameData.playerArmor.rotationDegrees || 0) * Math.PI / 180;
@@ -28,10 +30,9 @@ export class Player {
     this.magnet = 60; this.explosive = false;
     this.explosionRadius = 42; this.explosionDamage = 0.2;
     this.ricochet = 0; this.chainLightning = 0; this.laserLevel = 0;
-    this.droneCount = 0; this.orbitalCount = 0; this.orbitalDamage = 4;
     this.dashDamage = 0; this.lowHpDamage = 0; this.revive = 0;
     this.lives = 0; this.invuln = 0; this.level = 1; this.xp = 0; this.xpNeeded = 6;
-    this.thrust = 0; this.upgradeCounts = {};
+    this.thrust = 0; this.boosting = false; this.upgradeCounts = {};
     this.lastMoveDirection = 'z';
     this.aimOpening = 0;
     this.wingRecoil = 0;
