@@ -1,7 +1,9 @@
 // Main p5 glue: setup, draw and input handlers (module entry)
-import { renderMenuScrap, showScreen, openShop, closeShop, openDebugMenu, closeDebugMenu } from './ui.js';
+import { renderMenuScrap, renderLevelUp, showScreen, flashWaveBanner, setHudVisible, renderGameOver, tickWaveBannerTimer, openShop, closeShop, openDebugMenu, closeDebugMenu } from './ui.js';
 import * as gameplay from './gameplay.js';
 import { setShockwaveFrames } from './model/entities/effects.js';
+
+gameplay.setUIActions({ showScreen, flashWaveBanner, renderLevelUp, setHudVisible, renderGameOver });
 
 const SHOCKWAVE_FRAME_COUNT = 10;
 
@@ -66,18 +68,18 @@ function _windowResized(){ resizeCanvas(windowWidth, windowHeight); }
 function _draw(){ background(6,9,18); drawStarfield();
 	// translate world camera
 	push(); translate(-gameplay.camX, -gameplay.camY);
-	if(gameplay.gameState === 'playing'){
+	if(gameplay.getGameState() === 'playing'){
 		gameplay.updateRun();
 		gameplay.drawEntities();
 	}
-	else if(gameplay.gameState !== 'menu'){ gameplay.drawEntities(); }
+	else if(gameplay.getGameState() !== 'menu'){ gameplay.drawEntities(); }
 	pop();
-	if(gameplay.gameState === 'playing'){ gameplay.drawEnemyIndicators(); }
-	if(gameplay.gameState === 'playing'){ gameplay.drawCrosshair(); positionCursorAmmo(); noCursor(); }
+	if(gameplay.getGameState() === 'playing'){ gameplay.drawEnemyIndicators(); }
+	if(gameplay.getGameState() === 'playing'){ gameplay.drawCrosshair(); positionCursorAmmo(); noCursor(); }
 	else { cursor(); }
 	// HUD and overlays
-	if(gameplay.gameState === 'playing'){ gameplay.updateHUD(); }
-	if(gameplay.getWaveBannerTimer() > 0){ gameplay.tickWaveBannerTimer(); if(gameplay.getWaveBannerTimer() < 20){ const wb = document.getElementById('wave-banner'); if(wb) wb.style.opacity = gameplay.getWaveBannerTimer()/20; } }
+	if(gameplay.getGameState() === 'playing'){ gameplay.updateHUD(); }
+	tickWaveBannerTimer();
 }
 
 
@@ -112,24 +114,24 @@ function _keyPressed(){
 		return true;
 	}
 	if(key === 'F3'){
-		if(gameplay.gameState === 'debug') closeDebugMenu();
+		if(gameplay.getGameState() === 'debug') closeDebugMenu();
 		else openDebugMenu();
 		return false;
 	}
 	if(key === 'Escape'){
-		if(gameplay.gameState === 'playing') gameplay.pauseRun();
-		else if(gameplay.gameState === 'paused') gameplay.resumeRun();
+		if(gameplay.getGameState() === 'playing') gameplay.pauseRun();
+		else if(gameplay.getGameState() === 'paused') gameplay.resumeRun();
 		return false;
 	}
 	const lower = key.toLowerCase();
 	if(lower === 'r') { gameplay.requestPlayerReload(); return false; }
 	if(key === ' ' || key === 'Spacebar' || keyCode === 32){ gameplay.requestPlayerDash(); return false; }
-	if(typeof gameplay.keys !== 'undefined') gameplay.keys[lower] = true;
+	gameplay.setKeyState(lower, true);
 	return false;
 }
 function _keyReleased(){
 	if(keyCode === 17) controlWasDown = false;
-	if(typeof gameplay.keys !== 'undefined') gameplay.keys[key.toLowerCase()] = false;
+	gameplay.setKeyState(key, false);
 	return false;
 }
 // Wire p5 global callbacks to module functions
